@@ -1,0 +1,43 @@
+import time, random
+from datetime import datetime, timezone
+from shared.protocol.telemetry_csv import TelemetryUnsigned
+
+try:
+    import board
+    import busio
+    # Ab adafruit-circuitpython-bme280 2.6 liegt die Klasse im Untermodul `basic`.
+    from adafruit_bme280 import basic as adafruit_bme280
+    _HW = True
+except Exception:
+    _HW = False
+
+class BME280Reader:
+    def __init__(self):
+        self.sim_start = time.time()
+        if _HW:
+            i2c = busio.I2C(board.SCL, board.SDA)
+            self.bme = adafruit_bme280.Adafruit_BME280_I2C(i2c)  # addr 0x76/0x77
+            self.bme.sea_level_pressure = 1013.25
+
+    def read(self):
+        ts = datetime.now(timezone.utc).isoformat()
+        if _HW:
+            return TelemetryUnsigned(
+                ts=ts,
+                temperature_c=round(float(self.bme.temperature), 2),
+                humidity_pct=round(float(self.bme.humidity), 2),
+                pressure_hpa=round(float(self.bme.pressure), 2),
+                mode="hardware"
+            )
+
+        t = time.time() - self.sim_start
+        temp = 22.0 + 1.5 * (random.random() - 0.5) + 0.5 * (1 if int(t/30)%2==0 else -1)
+        hum  = 45.0 + 5.0 * (random.random() - 0.5)
+        pres = 1013.0 + 2.0 * (random.random() - 0.5)
+        return TelemetryUnsigned(
+            ts=ts,
+            temperature_c=round(temp, 2),
+            humidity_pct=round(hum, 2),
+            pressure_hpa=round(pres, 2),
+            mode="sim"
+        )
