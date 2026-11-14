@@ -144,8 +144,9 @@ def test_mqtt_end_to_end_50_messages(mqtt_broker) -> None:
         try:
             _wait_until(lambda: _count_csv_lines(PROCESSED_FILE) >= before_proc + n, timeout_s=40.0)
         except AssertionError:
-            out = sub_proc.stdout.read() if sub_proc.stdout else ""
-            err = sub_proc.stderr.read() if sub_proc.stderr else ""
+            # Erst beenden, dann lesen: read() auf einem laufenden Prozess blockiert.
+            sub_proc.terminate()
+            out, err = sub_proc.communicate(timeout=5)
             raise AssertionError(f"Timeout waiting for processed lines.\nSTDOUT:\n{out}\nSTDERR:\n{err}")
 
         after_raw = _count_csv_lines(RAW_FILE)
