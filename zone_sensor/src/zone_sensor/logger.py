@@ -5,9 +5,9 @@ Zonensensor-Logger – Erfasst Sensordaten (BME280) und schreibt signierte Telem
 Liest Konfiguration aus configs/zone_sensor.yaml und signiert jeden Datensatz mit HMAC-SHA256.
 """
 import csv, time, pathlib, yaml
-import os
 from .sensors.bme280 import BME280Reader
 from shared.protocol.signed_csv import format_signed_line
+from shared.crypto.secret_env import load_sensor_secret_hex
 
 HERE = pathlib.Path(__file__).resolve().parent
 
@@ -29,9 +29,8 @@ def main():
     sensor = BME280Reader()
     write_header_if_needed(CSV_PATH)
     interval = int(CFG["interval_sec"])
-    secret_hex = os.getenv("SENSOR_SECRET_HEX")
-    if secret_hex is None:
-            raise RuntimeError("SENSOR_SECRET_HEX nicht gesetzt. Bitte Umgebungsvariable setzen.")
+    # Fail-Secure: ohne gültigen Schlüssel kein Start (kein Ersatzschlüssel).
+    secret_hex = load_sensor_secret_hex()
 
     print(f"[ZONE_SENSOR] logging to {CSV_PATH} every {interval}s ... Ctrl+C to stop")
     while True:

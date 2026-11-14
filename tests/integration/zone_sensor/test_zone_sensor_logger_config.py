@@ -1,3 +1,4 @@
+import secrets
 import yaml
 from pathlib import Path
 import pytest
@@ -55,7 +56,8 @@ def test_logger_uses_real_zone_sensor_config(monkeypatch, tmp_path):
     # Останавливаем после 1 итерации
     monkeypatch.setattr(sensor_logger.time, "sleep", lambda _sec: (_ for _ in ()).throw(KeyboardInterrupt))
 
-    monkeypatch.setenv("SENSOR_SECRET_HEX", "a54f2e7b3c9084ee2a6b9f1d77c4a3e9b2d1c0f4e6a8b0c2d4f6e8a0c1d2e3f4")
+    secret_hex = secrets.token_hex(32)
+    monkeypatch.setenv("SENSOR_SECRET_HEX", secret_hex)
 
     with pytest.raises(KeyboardInterrupt):
         sensor_logger.main()
@@ -70,4 +72,4 @@ def test_logger_uses_real_zone_sensor_config(monkeypatch, tmp_path):
     assert len(lines) == 2
 
     data_line = lines[1]
-    assert verify_signed_line(data_line, "a54f2e7b3c9084ee2a6b9f1d77c4a3e9b2d1c0f4e6a8b0c2d4f6e8a0c1d2e3f4") is True
+    assert verify_signed_line(data_line, secret_hex) is True

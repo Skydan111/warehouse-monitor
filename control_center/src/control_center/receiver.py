@@ -12,6 +12,7 @@ import argparse
 from pathlib import Path
 
 from control_center.input_modes import receive_simulated, receive_from_file, receive_from_stdin
+from shared.crypto.secret_env import load_sensor_secret_hex
 
 
 def try_import_secman():
@@ -37,6 +38,10 @@ def main() -> int:
     parser.add_argument("--security-audit", default=None)
     parser.add_argument("--quarantine-csv", type=Path, default=Path("data/quarantine/telemetry.csv"))
     args = parser.parse_args()
+
+    # Fail-Secure: Schlüssel vor jeder Verarbeitung prüfen. Ohne gültigen
+    # Schlüssel würde sonst jede Zeile als fehlerhaft abgelehnt.
+    load_sensor_secret_hex()
 
     try:
         with SecurityManager(args.security_policy, security_log_path=args.security_log, audit_log_path=args.security_audit) as secman:

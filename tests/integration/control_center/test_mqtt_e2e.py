@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import secrets
 import subprocess
 import time
 from pathlib import Path
@@ -76,7 +77,7 @@ def _wait_for_subscriber_ready(sub_proc: subprocess.Popen[str], timeout_s: float
 
 def test_mqtt_end_to_end_50_messages() -> None:
     zone_id = "ZONE-01"
-    secret_hex = "deadbeef"
+    secret_hex = secrets.token_hex(32)
     topic = telemetry_topic(zone_id)
 
     # --- Docker Broker hochfahren ---

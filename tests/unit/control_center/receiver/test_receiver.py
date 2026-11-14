@@ -83,7 +83,7 @@ def test_split_payload_mac_empty_mac():
 def test_handle_line_writes_processed_on_ok(monkeypatch, tmp_path):
     raw, proc, rej = patch_paths(monkeypatch, tmp_path)
 
-    monkeypatch.setattr(packet_pipeline, "verify_with_config", lambda payload, mac: True)
+    monkeypatch.setattr(packet_pipeline, "verify_with_env_key", lambda payload, mac: True)
 
     sec = SecmanStub(locked=False)
     line = "2025-11-24T17:52:54Z,22.50,45.20,1013.20,NOMINAL,DEADBEEF"
@@ -103,7 +103,7 @@ def test_handle_line_writes_processed_on_ok(monkeypatch, tmp_path):
 def test_handle_line_writes_rejected_on_invalid_signature(monkeypatch, tmp_path):
     raw, proc, rej = patch_paths(monkeypatch, tmp_path)
 
-    monkeypatch.setattr(packet_pipeline, "verify_with_config", lambda payload, mac: False)
+    monkeypatch.setattr(packet_pipeline, "verify_with_env_key", lambda payload, mac: False)
 
     sec = SecmanStub(locked=False)
     line = "2025-11-24T17:52:54Z,22.50,45.20,1013.20,NOMINAL,BADSIG"
@@ -118,8 +118,8 @@ def test_handle_line_writes_rejected_on_invalid_signature(monkeypatch, tmp_path)
 def test_handle_line_marks_malformed_packet(monkeypatch, tmp_path):
     raw, proc, rej = patch_paths(monkeypatch, tmp_path)
 
-    # verify_with_config не должен вызываться, но пусть будет
-    monkeypatch.setattr(packet_pipeline, "verify_with_config", lambda payload, mac: True)
+    # verify_with_env_key не должен вызываться, но пусть будет
+    monkeypatch.setattr(packet_pipeline, "verify_with_env_key", lambda payload, mac: True)
 
     sec = SecmanStub(locked=False)
     # нет последней запятой => split_payload_mac кинет no_mac_delimiter
@@ -136,7 +136,7 @@ def test_handle_line_marks_malformed_packet(monkeypatch, tmp_path):
 
 def test_handle_line_lockout_quarantine(monkeypatch, tmp_path):
     raw, proc, rej = patch_paths(monkeypatch, tmp_path)
-    monkeypatch.setattr(packet_pipeline, "verify_with_config", lambda payload, mac: True)
+    monkeypatch.setattr(packet_pipeline, "verify_with_env_key", lambda payload, mac: True)
 
     sec = SecmanStub(locked=True, action="quarantine")
     qpath = tmp_path / "data" / "quarantine" / "telemetry.csv"
@@ -159,7 +159,7 @@ def test_handle_line_lockout_quarantine(monkeypatch, tmp_path):
 
 def test_receive_from_file_does_not_duplicate_when_reading_raw(monkeypatch, tmp_path):
     raw, proc, rej = patch_paths(monkeypatch, tmp_path)
-    monkeypatch.setattr(packet_pipeline, "verify_with_config", lambda payload, mac: True)
+    monkeypatch.setattr(packet_pipeline, "verify_with_env_key", lambda payload, mac: True)
 
     # создаём RAW файл (header + 1 строка)
     line = "2025-11-24T17:52:54Z,22.50,45.20,1013.20,NOMINAL,SIG"
@@ -176,7 +176,7 @@ def test_receive_from_file_does_not_duplicate_when_reading_raw(monkeypatch, tmp_
 
 def test_receive_from_file_ingests_raw_when_source_is_not_raw(monkeypatch, tmp_path):
     raw, proc, rej = patch_paths(monkeypatch, tmp_path)
-    monkeypatch.setattr(packet_pipeline, "verify_with_config", lambda payload, mac: True)
+    monkeypatch.setattr(packet_pipeline, "verify_with_env_key", lambda payload, mac: True)
 
     src = tmp_path / "input.csv"
     line1 = "2025-11-24T17:52:54Z,22.50,45.20,1013.20,NOMINAL,SIG1"

@@ -3,31 +3,16 @@
 verify.py – HMAC-Signaturprüfung für Telemetriedaten
 
 Funktionen:
- - Lädt geheimen Schlüssel aus configs/control_center.json oder Umgebungsvariable
+ - Lädt den Geräteschlüssel ausschließlich aus der Umgebungsvariable
+   SENSOR_SECRET_HEX (shared.crypto.secret_env). Es gibt keinen Rückfall
+   auf eine Konfigurationsdatei: Fehlt der Schlüssel, bricht die Prüfung ab.
  - Verifiziert HMAC-SHA256-Signaturen
  - Wird vom Receiver-Modul verwendet
 """
 
-import json, os, pathlib
 from shared.protocol.signed_csv import verify_signed_line
 from shared.crypto.hmac_sha256 import verify as hmac_verify
-
-# --- Neue Sektion: Laden der Konfiguration ---
-from control_center.config.paths import ROOT_DIR
-CFG_PATH = ROOT_DIR / "configs" / "control_center.json"
-
-def _load_secret_hex() -> str:
-    """
-    Bezieht den geheimen Schlüssel (Hex) aus:
-    1) Umgebungsvariable HMAC_SECRET_HEX (falls gesetzt),
-    2) sonst aus configs/control_center.json ("hmac_secret").
-    """
-    env = os.getenv("HMAC_SECRET_HEX")
-    if env:
-        return env.strip()
-    with open(CFG_PATH, "r", encoding="utf-8") as f:
-        cfg = json.load(f)
-    return cfg["hmac_secret"].strip()
+from shared.crypto.secret_env import load_sensor_secret_hex
 
 
 # --- Delegiert an shared.crypto.hmac_sha256 ---
@@ -47,20 +32,20 @@ def verify(secret_hex: str, payload_bytes: bytes, mac_hex: str) -> bool:
     return hmac_verify(expected, secret_hex, mac_hex)
 
 
-# --- Zusatzfunktion: Automatische Variante ---
-def verify_with_config(payload_bytes: bytes, mac_hex: str) -> bool:
-    """Lädt den geheimen Schlüssel automatisch aus configs/control_center.json."""
-    secret = _load_secret_hex()
+# --- Varianten mit Schlüssel aus der Umgebung ---
+def verify_with_env_key(payload_bytes: bytes, mac_hex: str) -> bool:
+    """Prüft mit dem Geräteschlüssel aus SENSOR_SECRET_HEX."""
+    secret = load_sensor_secret_hex()
     return verify(secret, payload_bytes, mac_hex)
 
-def verify_csv_line_with_config(line: str) -> bool:
+def verify_csv_line_with_env_key(line: str) -> bool:
     """
     Verifiziert eine Telemetriezeile im Format:
     ts,temperature_c,humidity_pct,pressure_hpa,mode,sig
 
-    Secret wird aus HMAC_SECRET_HEX (env) oder configs/control_center.json geladen.
+    Der Schlüssel wird aus SENSOR_SECRET_HEX geladen.
     """
-    secret = _load_secret_hex()
+    secret = load_sensor_secret_hex()
     return verify_signed_line(line, secret)
 
 def main():
@@ -79,7 +64,7 @@ def main():
             if not line or line.startswith("ts,"):
                 continue
 
-            if verify_csv_line_with_config(line):
+            if verify_csv_line_with_env_key(line):
                 ok += 1
             else:
                 bad += 1

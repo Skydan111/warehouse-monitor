@@ -4,6 +4,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+# shellcheck source=lib/env.sh
+source "$ROOT/scripts/lib/env.sh"
+load_dotenv
+require_env SENSOR_SECRET_HEX
+
 source .venv/bin/activate
 
 export ZONE_ID="${ZONE_ID:-ZONE-01}"

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import secrets
 import subprocess
 import time
 from pathlib import Path
@@ -32,7 +33,7 @@ def _count(path: Path) -> int:
 
 def test_mqtt_tampering_drop_and_log() -> None:
     zone_id = "ZONE-01"
-    secret_hex = "deadbeef"
+    secret_hex = secrets.token_hex(32)
     topic = telemetry_topic(zone_id)
 
     subprocess.run(

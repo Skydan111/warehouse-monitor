@@ -9,6 +9,7 @@ import paho.mqtt.client as mqtt
 from shared.comm.envelope import EnvelopeV1, bytes_from_b64
 from shared.comm.topics import telemetry_topic
 from shared.protocol.signed_csv import verify_signed_line
+from shared.crypto.secret_env import load_sensor_secret_hex
 from control_center.mqtt_guard import GuardConfig, MqttMessageGuard
 from control_center.input_modes import ingest_raw_line
 from control_center.packet_pipeline import handle_verified_line
@@ -87,9 +88,8 @@ def main() -> int:
     broker_host = _env("MQTT_BROKER_HOST", "localhost")
     broker_port = int(_env("MQTT_BROKER_PORT", "1883"))
     zone_id = _env("ZONE_ID", "ZONE-01")
-    secret_hex = os.getenv("SENSOR_SECRET_HEX")
-    if secret_hex is None:
-            raise RuntimeError("SENSOR_SECRET_HEX nicht gesetzt. Bitte Umgebungsvariable setzen.")
+    # Fail-Secure: ohne gültigen Schlüssel kein Start (kein Ersatzschlüssel).
+    secret_hex = load_sensor_secret_hex()
     policy_path = _env("SECURITY_POLICY_PATH", "configs/security_policy.yaml")
     secman = SecurityManager(policy_path=policy_path)
 
