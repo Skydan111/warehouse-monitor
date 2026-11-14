@@ -5,5 +5,7 @@ services:
     ports:
       - "1883:1883"
     volumes:
-      - ./configs/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./configs/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./configs/mosquitto/acl:/mosquitto/config/acl:ro
+      - ./configs/mosquitto/passwd:/mosquitto/config/passwd:ro
     restart: unless-stopped

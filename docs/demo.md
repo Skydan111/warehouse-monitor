@@ -67,7 +67,19 @@ pytest --co -q
 
 Das System nutzt Eclipse Mosquitto als MQTT Broker.
 
+### Geheimnisse erzeugen (einmalig)
+
+Der Broker nimmt nur angemeldete Clients an. Schlüssel und Passwörter erzeugt einmalig:
+
+```bash
+./scripts/mqtt_provision.sh <IP des Leitstands>
+```
+
+Ergebnis: `.env` (Leitstand), `.env.zone-01` (für den Zonensensor als `.env`), `configs/mosquitto/passwd` (Hashes). Es wird kein Wert angezeigt. Details: [Security](security.md#geheimnisse-und-broker-zugang).
+
 ### Broker starten
+
+Normalerweise startet `./scripts/control_center_start.sh` den Broker mit. Einzeln:
 
 ```bash
 docker compose -f docker-compose.mqtt.yml up -d
@@ -76,6 +88,7 @@ docker compose -f docker-compose.mqtt.yml up -d
 **Broker läuft auf:**
 - Host: `localhost`
 - Port: `1883`
+- Anmeldung mit Benutzer und Passwort, Zugriffsliste je Benutzer
 - Kein TLS (Demo-Modus)
 
 ### Broker-Status prüfen
@@ -495,6 +508,18 @@ pip install -e shared -e control_center -e zone_sensor
 
 ---
 
+### Problem: "MQTT-Verbindung abgelehnt rc=4" oder "rc=5"
+
+Der Broker hat die Anmeldung abgelehnt (rc=4: Benutzer oder Passwort falsch, rc=5: nicht berechtigt). Subscriber bzw. Publisher beenden sich danach.
+
+- Stimmen `MQTT_USERNAME`/`MQTT_PASSWORD` in `.env` mit der Passwortdatei des Brokers überein? Nach `mqtt_provision.sh --force` braucht auch der Zonensensor die neue `.env`.
+- Wurde der Broker nach dem Erzeugen der Passwortdatei neu gestartet?
+- Broker-Log prüfen: `docker logs warehouse-mqtt-broker`. Meldet er `Unable to open pwfile`, kann der Container die Datei nicht lesen (Rechte prüfen).
+
+### Problem: "SENSOR_SECRET_HEX nicht gesetzt" oder "ungültig"
+
+`.env` fehlt, enthält den Schlüssel nicht oder der Schlüssel hat nicht genau 64 Hex-Zeichen. Den Wert nicht anzeigen lassen; bei Zweifeln neu erzeugen (`mqtt_provision.sh --force`) und `.env.zone-01` erneut auf den Zonensensor kopieren.
+
 ### Problem: "Permission denied" bei Skripten
 
 **Ursache:** Skripte sind nicht ausführbar.
@@ -518,7 +543,8 @@ Nach erfolgreicher Demo:
 2. **Konfiguration anpassen**
    - `configs/security_policy.yaml` — Lockout-Schwellwerte
    - `configs/zone_sensor.yaml` — Telemetrie-Intervall
-   - `configs/control_center.json` — MQTT-Verbindung
+   - `.env` — Geräteschlüssel und Broker-Zugang (lokal, nicht versioniert)
+   - `configs/mosquitto/acl` — Rechte je Broker-Benutzer
 
 3. **Hardware-Tests**
    - Raspberry Pi mit BME280 Sensor aufsetzen
@@ -536,4 +562,4 @@ Nach erfolgreicher Demo:
 
 ---
 
-*Letzte Aktualisierung: Februar 2026*
+*Letzte Aktualisierung: November 2026*

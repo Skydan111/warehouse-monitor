@@ -6,7 +6,8 @@ from pathlib import Path
 import datetime
 from typing import Optional, Tuple, Dict, Any
 from control_center.config.paths import CSV_HEADER, PROC_PATH, REJ_PATH
-from control_center.verify import verify_with_config
+from control_center.verify import verify_with_env_key
+from shared.crypto.secret_env import SecretConfigError
 from control_center.io_utils import append_line
 
 
@@ -83,9 +84,12 @@ def handle_line(
     rej_line = None
     try:
         payload, mac = split_payload_mac(line)
-        ok = verify_with_config(payload, mac)
+        ok = verify_with_env_key(payload, mac)
         if not ok:
             verify_reason = "invalid_signature"
+    except SecretConfigError:
+        # Konfigurationsfehler, kein Paketfehler: nicht als "malformed" ablegen.
+        raise
     except Exception as e:
         ok = False
         verify_reason = "malformed_packet"

@@ -4,10 +4,20 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+# shellcheck source=lib/env.sh
+source "$ROOT/scripts/lib/env.sh"
+load_dotenv
+require_env SENSOR_SECRET_HEX MQTT_USERNAME MQTT_PASSWORD
+
+# Ohne Passwortdatei würde Docker an ihrer Stelle ein leeres Verzeichnis anlegen.
+PASSWD_FILE="$ROOT/configs/mosquitto/passwd"
+if [[ ! -f "$PASSWD_FILE" || ! -s "$PASSWD_FILE" ]]; then
+  echo "[control_center_start] FEHLER: $PASSWD_FILE fehlt oder ist leer." >&2
+  echo "[control_center_start] Einmalig erzeugen: ./scripts/mqtt_provision.sh <IP dieses Rechners>" >&2
+  exit 1
+fi
 
 export ZONE_ID="${ZONE_ID:-ZONE-01}"
-export SENSOR_SECRET_HEX="${SENSOR_SECRET_HEX:-a54f2e7b3c9084ee2a6b9f1d77c4a3e9b2d1c0f4e6a8b0c2d4f6e8a0c1d2e3f4}"
-export HMAC_SECRET_HEX="${HMAC_SECRET_HEX:-$SENSOR_SECRET_HEX}"
 
 export MQTT_BROKER_HOST="${MQTT_BROKER_HOST:-localhost}"
 export MQTT_BROKER_PORT="${MQTT_BROKER_PORT:-1883}"

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import os
+import secrets
 import subprocess
 import time
 from pathlib import Path
 
-import paho.mqtt.client as mqtt
+import mqtt_test_broker
 
 from shared.comm.envelope import EnvelopeV1, b64_from_bytes
 from shared.comm.topics import telemetry_topic
@@ -14,7 +15,6 @@ from shared.protocol.telemetry_csv import TelemetryUnsigned
 
 
 ROOT = Path(__file__).resolve().parents[3]
-COMPOSE_FILE = ROOT / "docker-compose.mqtt.yml"
 
 PROCESSED_FILE = ROOT / "data" / "processed" / "telemetry.csv"
 
@@ -29,29 +29,16 @@ def _count(path: Path) -> int:
     )
 
 
-def test_mqtt_replay_drop_duplicate_and_log() -> None:
+def test_mqtt_replay_drop_duplicate_and_log(mqtt_broker) -> None:
     zone_id = "ZONE-01"
-    secret_hex = "deadbeef"
+    secret_hex = secrets.token_hex(32)
     topic = telemetry_topic(zone_id)
 
-    subprocess.run(
-        ["docker", "compose", "-f", str(COMPOSE_FILE), "up", "-d"],
-        check=True,
-        cwd=str(ROOT),
-    )
-    time.sleep(0.5)
 
     before_ok = _count(PROCESSED_FILE)
 
-    env = os.environ.copy()
-    env["ZONE_ID"] = zone_id
-    env["SENSOR_SECRET_HEX"] = secret_hex
-    env["MQTT_BROKER_HOST"] = "localhost"
-    env["MQTT_BROKER_PORT"] = "1883"
-    env["PYTHONUNBUFFERED"] = "1"
-    env["SECURITY_POLICY_PATH"] = "configs/security_policy.yaml"
-    env["DEDUP_CACHE_SIZE"] = "500"
-    env["MAX_SKEW_SECONDS"] = "120"
+    # Leitstand meldet sich als control_center am Test-Broker an
+    env = mqtt_test_broker.subscriber_env(mqtt_broker, secret_hex, zone_id)
 
     sub = subprocess.Popen(
         ["python", "-u", "control_center/src/control_center/mqtt_subscriber.py"],
@@ -65,8 +52,8 @@ def test_mqtt_replay_drop_duplicate_and_log() -> None:
     try:
         time.sleep(1.0)
 
-        client = mqtt.Client(client_id="replay-test")
-        client.connect("localhost", 1883, keepalive=30)
+        # Sender meldet sich als Zonensensor zone-01 an
+        client = mqtt_test_broker.zone_client(mqtt_broker, client_id="replay-test")
         client.loop_start()
 
         unsigned = TelemetryUnsigned(
@@ -131,11 +118,6 @@ def test_mqtt_replay_drop_duplicate_and_log() -> None:
         out = sub.stdout.read() if sub.stdout else ""
         err = sub.stderr.read() if sub.stderr else ""
 
-        subprocess.run(
-            ["docker", "compose", "-f", str(COMPOSE_FILE), "down"],
-            cwd=str(ROOT),
-            check=False,
-        )
 
     combined = (out + "\n" + err).lower()
     assert "drop_duplicate" in combined or "duplicate" in combined, (

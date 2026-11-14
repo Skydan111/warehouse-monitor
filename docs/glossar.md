@@ -20,6 +20,9 @@ Einheitliche Begriffe für Code, Dokumentation und Präsentation des Warehouse M
 |---|---|---|
 | **Zonen-ID** | `zone_id`, `ZONE_ID` | Kennung der Lagerzone und damit des Zonensensors, z. B. `ZONE-01`. |
 | **Geräteschlüssel** | `SENSOR_SECRET_HEX` | Geheimer HMAC-Schlüssel des Zonensensors. Gehört zum Gerät, nicht zur Zone. |
+| **Broker-Zugang** | `MQTT_USERNAME`, `MQTT_PASSWORD` | Benutzer und Passwort, mit denen sich Zonensensor (`zone-01`) und Leitstand (`control_center`) am Broker anmelden. |
+| **Zugriffsliste (ACL)** | `configs/mosquitto/acl` | Legt fest, welcher Broker-Benutzer welche Topics lesen oder schreiben darf. |
+| **Lokale Geheimnisdatei** | `.env` | Datei mit Geräteschlüssel und Broker-Zugang auf dem jeweiligen Rechner. Rechte 600, nie im Repository. Vorlage: `.env.example`. |
 | **MQTT-Topic** | `warehouse/v1/{zone_id}/telemetry` | Kanal, über den ein Zonensensor seine Telemetrie veröffentlicht. |
 | **Envelope** | `EnvelopeV1` | JSON-Hülle einer MQTT-Nachricht mit `zone_id`, `msg_id`, Zeitstempel und signierter Nutzlast (Base64). |
 | **Telemetrie** | `telemetry` | Laufend übertragene Messwerte (Temperatur, Luftfeuchtigkeit). Üblicher Begriff im industriellen IoT. |

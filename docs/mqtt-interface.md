@@ -119,17 +119,22 @@ Reihenfolge der Verarbeitung im Leitstand:
 
 ---
 
-## Transport Security (späterer Schritt)
+## Broker-Zugang und Transport Security
 
-### Initialversion
+### Umgesetzt
 
-- MQTT ohne TLS ist zulässig (lokales Setup).
-- HMAC / Signed Payload bleibt immer aktiv.
+- Kein anonymer Zugang (`allow_anonymous false`).
+- Anmeldung mit `MQTT_USERNAME` / `MQTT_PASSWORD`, ein Benutzer je Gerät.
+- Broker-ACL (`configs/mosquitto/acl`):
+  - `control_center`: `warehouse/v1/+/telemetry` lesen
+  - `zone-01`: `warehouse/v1/ZONE-01/telemetry` schreiben
+- CONNACK 4/5 (Zugangsdaten falsch, nicht berechtigt): Client beendet sich mit Code 2.
+- HMAC / Signed Payload bleibt immer aktiv, unabhängig von der Anmeldung.
 
-### Später
+### Offen
 
-- TLS / mTLS
-- Broker-ACLs (topic-based Zugriffskontrolle)
+- TLS / mTLS (ohne TLS sind Passwörter und Payload im Netz lesbar)
+- Zonen-ID in den signierten Daten (die ACL bindet nur das Topic an den Benutzer)
 
 ---
 
@@ -138,7 +143,8 @@ Reihenfolge der Verarbeitung im Leitstand:
 1. Der Zonensensor publiziert Telemetry via MQTT (QoS 1).
 2. Der Leitstand empfängt Nachrichten, dedupliziert sie,
    prüft Freshness und verifiziert die Signatur.
-3. Integration Test startet einen lokalen Broker
+3. Integration Test startet einen eigenen Test-Broker
+   (`docker-compose.mqtt.test.yml`, Port 18830, gleiche Konfiguration und ACL)
    und prüft 50–100 Nachrichten End-to-End.
 4. Security Tests:
    - Tampering

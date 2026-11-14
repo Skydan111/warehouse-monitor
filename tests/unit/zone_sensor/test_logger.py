@@ -1,3 +1,4 @@
+import secrets
 import io
 import yaml
 import builtins
@@ -13,7 +14,7 @@ from zone_sensor import logger as sensor_logger
 from shared.protocol.telemetry_csv import TelemetryUnsigned
 
 
-SECRET = "aabbccddeeff00112233445566778899"
+SECRET = secrets.token_hex(32)  # pro Testlauf neu, kein fester Schlüssel
 
 
 class SensorStub:

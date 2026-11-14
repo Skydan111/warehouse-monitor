@@ -8,7 +8,9 @@ import paho.mqtt.client as mqtt
 
 from shared.comm.envelope import EnvelopeV1, bytes_from_b64
 from shared.comm.topics import telemetry_topic
+from shared.comm.mqtt_auth import FATAL_CONNECT_RC, connect_rc_text, load_mqtt_credentials
 from shared.protocol.signed_csv import verify_signed_line
+from shared.crypto.secret_env import load_sensor_secret_hex
 from control_center.mqtt_guard import GuardConfig, MqttMessageGuard
 from control_center.input_modes import ingest_raw_line
 from control_center.packet_pipeline import handle_verified_line
@@ -27,7 +29,11 @@ def on_connect(client: mqtt.Client, userdata: object, flags: dict, rc: int) -> N
     topic = telemetry_topic(zone_id)
 
     if rc != 0:
-        print(f"[control_center] MQTT connect failed rc={rc}", file=sys.stderr)
+        print(f"[control_center] MQTT-Verbindung abgelehnt rc={rc}: {connect_rc_text(rc)}", file=sys.stderr)
+        if rc in FATAL_CONNECT_RC:
+            # Falsche oder fehlende Zugangsdaten behebt kein erneuter Versuch.
+            userdata["fatal_rc"] = rc  # type: ignore[index]
+            client.disconnect()
         return
 
     print(f"[control_center] Connected. Subscribing to {topic}")
@@ -87,9 +93,9 @@ def main() -> int:
     broker_host = _env("MQTT_BROKER_HOST", "localhost")
     broker_port = int(_env("MQTT_BROKER_PORT", "1883"))
     zone_id = _env("ZONE_ID", "ZONE-01")
-    secret_hex = os.getenv("SENSOR_SECRET_HEX")
-    if secret_hex is None:
-            raise RuntimeError("SENSOR_SECRET_HEX nicht gesetzt. Bitte Umgebungsvariable setzen.")
+    # Fail-Secure: ohne gültigen Schlüssel kein Start (kein Ersatzschlüssel).
+    secret_hex = load_sensor_secret_hex()
+    creds = load_mqtt_credentials()
     policy_path = _env("SECURITY_POLICY_PATH", "configs/security_policy.yaml")
     secman = SecurityManager(policy_path=policy_path)
 
@@ -98,22 +104,29 @@ def main() -> int:
     max_skew = int(_env("MAX_SKEW_SECONDS", "120"))
     guard = MqttMessageGuard(GuardConfig(dedup_size=dedup_size, max_skew_seconds=max_skew))
 
-    client = mqtt.Client(
-        client_id=f"control-center-{zone_id}",
-        userdata={
-            "zone_id": zone_id,
-            "secret_hex": secret_hex,
-            "guard": guard,
-            "secman": secman,
-            "quarantine_path": quarantine_path,
-            },
-            )
+    userdata = {
+        "zone_id": zone_id,
+        "secret_hex": secret_hex,
+        "guard": guard,
+        "secman": secman,
+        "quarantine_path": quarantine_path,
+        "fatal_rc": None,
+    }
+    client = mqtt.Client(client_id=f"control-center-{zone_id}", userdata=userdata)
+    client.username_pw_set(creds.username, creds.password)
     client.on_connect = on_connect
     client.on_message = on_message
 
-    print(f"[control_center] Connecting to mqtt://{broker_host}:{broker_port} (zone_id={zone_id})")
+    print(
+        f"[control_center] Connecting to mqtt://{broker_host}:{broker_port} "
+        f"(zone_id={zone_id}, user={creds.username})"
+    )
     client.connect(broker_host, broker_port, keepalive=30)
     client.loop_forever()
+
+    if userdata["fatal_rc"] is not None:
+        print("[control_center] Abbruch: Anmeldung am Broker fehlgeschlagen.", file=sys.stderr)
+        return 2
     return 0
 
 

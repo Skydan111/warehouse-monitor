@@ -65,12 +65,12 @@ def make_signed_line(payload: str) -> str:
 def test_pipeline_ok_goes_to_processed(monkeypatch, tmp_path):
     raw, proc, rej = patch_paths(monkeypatch, tmp_path)
 
-    # verify_with_config принимает payload_bytes и mac_hex
-    def verify_with_config(payload_bytes: bytes, mac_hex: str) -> bool:
+    # verify_with_env_key принимает payload_bytes и mac_hex
+    def verify_with_env_key(payload_bytes: bytes, mac_hex: str) -> bool:
         payload = payload_bytes.decode("utf-8")
         return hmac_sign(payload, SECRET) == mac_hex
 
-    monkeypatch.setattr(packet_pipeline, "verify_with_config", verify_with_config)
+    monkeypatch.setattr(packet_pipeline, "verify_with_env_key", verify_with_env_key)
 
     payload = "2025-11-24T17:52:54Z,22.50,45.20,1013.20,NOMINAL"
     line = make_signed_line(payload)
@@ -88,11 +88,11 @@ def test_pipeline_ok_goes_to_processed(monkeypatch, tmp_path):
 def test_pipeline_bad_sig_goes_to_rejected(monkeypatch, tmp_path):
     raw, proc, rej = patch_paths(monkeypatch, tmp_path)
 
-    def verify_with_config(payload_bytes: bytes, mac_hex: str) -> bool:
+    def verify_with_env_key(payload_bytes: bytes, mac_hex: str) -> bool:
         payload = payload_bytes.decode("utf-8")
         return hmac_sign(payload, SECRET) == mac_hex
 
-    monkeypatch.setattr(packet_pipeline, "verify_with_config", verify_with_config)
+    monkeypatch.setattr(packet_pipeline, "verify_with_env_key", verify_with_env_key)
 
     payload = "2025-11-24T17:52:54Z,22.50,45.20,1013.20,NOMINAL"
     line = f"{payload},WRONGSIG"
@@ -113,7 +113,7 @@ def test_pipeline_lockout_quarantines_before_verify(monkeypatch, tmp_path):
     raw, proc, rej = patch_paths(monkeypatch, tmp_path)
 
     # если lockout — verify не должен иметь значения
-    monkeypatch.setattr(packet_pipeline, "verify_with_config", lambda *_: True)
+    monkeypatch.setattr(packet_pipeline, "verify_with_env_key", lambda *_: True)
 
     payload = "2025-11-24T17:52:54Z,22.50,45.20,1013.20,NOMINAL"
     line = make_signed_line(payload)

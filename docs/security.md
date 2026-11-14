@@ -9,9 +9,12 @@ Der Fokus liegt auf:
 - **Replay-Resistenz** — Verhinderung von Wiederholungsangriffen
 - **Anomalie-Erkennung** — Adaptive Reaktion auf verdächtige Muster
 
+**Teilweise abgedeckt:**
+- Zugang zum Broker: Anmeldung mit Benutzer und Passwort, Zugriffsliste je Benutzer (ohne TLS, siehe unten)
+
 **Nicht abgedeckt:**
 - Vertraulichkeit (Payload ist nicht verschlüsselt)
-- Authentifizierung der Endpunkte (Shared Secret, kein PKI)
+- Unterscheidung der Endpunkte über den HMAC-Schlüssel (Shared Secret, kein PKI)
 - Transport-Security (MQTT ohne TLS in Demo-Umgebung)
 
 ---
@@ -25,6 +28,7 @@ Der Fokus liegt auf:
 | **Duplicate Messages** | Netzwerk/Broker sendet Nachricht mehrfach (QoS 1) | msg_id Deduplication (LRU Cache) | Transport |
 | **Wiederholte ungültige Versuche** | Angreifer sendet kontinuierlich ungültige Nachrichten | Adaptive Security (Lockout) | Application |
 | **Malformed Packets** | Beschädigte oder absichtlich fehlerhafte Nachrichten | Schema-Validierung, Fehlerbehandlung | Application |
+| **Unbefugter Zugriff auf den Broker** | Fremder Client sendet oder liest mit | Anmeldung, Passwort je Gerät, ACL je Benutzer | Broker |
 
 **Nicht adressierte Bedrohungen (Demo-Scope):**
 - Man-in-the-Middle (kein TLS)
@@ -83,6 +87,49 @@ ts,temperature_c,humidity_pct,pressure_hpa,mode
 | Signatur-Ersetzen (ohne Schlüssel) | HMAC-Verifikation schlägt fehl → rejected/ |
 | Known-Plaintext | HMAC ist resistent (One-Way-Function) |
 | Timing-Angriff auf Verify | `hmac.compare_digest()` ist constant-time |
+
+---
+
+## Geheimnisse und Broker-Zugang
+
+### Geräteschlüssel
+
+- Einzige Quelle: Umgebungsvariable `SENSOR_SECRET_HEX`, lokal aus `.env` geladen (`scripts/lib/env.sh`).
+- Gelesen und geprüft nur in `shared/crypto/secret_env.py`: genau 64 Hex-Zeichen (32 Byte).
+- Kein Vorgabewert, kein zweiter Variablenname, kein Rückfall auf eine Konfigurationsdatei.
+- Fehlt der Schlüssel oder ist er ungültig, starten Zonensensor, Subscriber und Receiver nicht. Die Pipeline legt in diesem Fall auch keine Zeile als „malformed“ ab, sondern bricht ab: Ein Konfigurationsfehler ist kein Paketfehler.
+- Der Wert erscheint in keiner Meldung, keinem Log und keinem Test. Tests erzeugen je Lauf einen eigenen Schlüssel (`secrets.token_hex(32)`).
+
+### Broker-Anmeldung und Zugriffsliste
+
+| Einstellung | Wert |
+|-------------|------|
+| Anonymer Zugang | aus (`allow_anonymous false`) |
+| Passwortdatei | `configs/mosquitto/passwd`, nur Hashes, nicht versioniert |
+| Zugriffsliste | `configs/mosquitto/acl`, versioniert |
+
+| Benutzer | Darf |
+|----------|------|
+| `control_center` | `warehouse/v1/+/telemetry` lesen, nichts senden |
+| `zone-01` | nur `warehouse/v1/ZONE-01/telemetry` schreiben, nichts lesen |
+
+Die Clients lesen `MQTT_USERNAME` und `MQTT_PASSWORD` aus der Umgebung (`shared/comm/mqtt_auth.py`), ohne Vorgabewerte. Lehnt der Broker die Anmeldung ab (CONNACK 4 oder 5), beenden sich Subscriber und Publisher mit Code 2. Ein erneuter Versuch würde falsche Zugangsdaten nicht beheben.
+
+Ohne TLS gehen Benutzername und Passwort im Klartext über das Netz. Die Anmeldung schützt vor zufälligem Zugriff, nicht vor einem Angreifer, der das Netz mitschneidet.
+
+### Erzeugen und Wechseln der Geheimnisse
+
+`scripts/mqtt_provision.sh <IP des Leitstands>` läuft auf dem Leitstand und erzeugt in einem Schritt:
+
+- einen neuen Geräteschlüssel,
+- je ein zufälliges Passwort für `control_center` und `zone-01`,
+- `.env` (Leitstand), `.env.zone-01` (für den Zonensensor) und die gehashte Passwortdatei.
+
+Alle Dateien erhalten die Rechte 600. Kein Wert wird ausgegeben. Vorhandene Dateien werden nur mit `--force` überschrieben; damit ist das Skript zugleich der Ablauf für einen Schlüsselwechsel.
+
+### Kompromittierter Schlüssel
+
+Bis November 2026 stand ein Geräteschlüssel im Repository: in `configs/control_center.json`, als Vorgabewert in `scripts/control_center_start.sh` und in einem Test. Er bleibt im Git-Verlauf sichtbar. Löschen aus der aktuellen Version reicht deshalb nicht. Der Schlüssel gilt als bekannt und wurde auf allen Geräten durch einen neuen ersetzt.
 
 ---
 
@@ -329,9 +376,10 @@ Alle sicherheitsrelevanten Ereignisse werden protokolliert:
 ### Demo-Umgebung
 
 **Nicht produktionsreif:**
-- Shared Secret in Config-Dateien (keine Rotation)
+- Ein gemeinsamer Schlüssel für alle Geräte, im Klartext in einer lokalen `.env`
+- Schlüsselwechsel nur von Hand (`scripts/mqtt_provision.sh --force`), kein regelmäßiger Wechsel
 - Kein Hardware Security Module (HSM)
-- Keine TLS/mTLS auf MQTT
+- Keine TLS/mTLS auf MQTT, Broker-Passwörter im Klartext auf dem Netz
 - Kein zentrales Secret Management
 
 ### HMAC-Limitierungen
@@ -396,8 +444,8 @@ Sicherheitseigenschaften werden in `tests/integration/security/` geprüft:
    - Client-seitige Zertifikatsvalidierung
 
 2. **Secret Management**
-   - Secrets aus Umgebungsvariablen (nicht Config-Dateien)
-   - Rotation-Mechanismus
+   - Umgesetzt: Secrets nur aus Umgebungsvariablen bzw. lokaler `.env`, Wechsel per Skript
+   - Offen: Schlüsseltresor, regelmäßige Rotation, Schlüssel je Gerät
 
 3. **Monitoring & Alerting**
    - Security-Events in SIEM
@@ -433,4 +481,4 @@ Sicherheitseigenschaften werden in `tests/integration/security/` geprüft:
 
 ---
 
-*Letzte Aktualisierung: Februar 2026*
+*Letzte Aktualisierung: November 2026*

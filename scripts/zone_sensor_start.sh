@@ -4,10 +4,15 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+# shellcheck source=lib/env.sh
+source "$ROOT/scripts/lib/env.sh"
+load_dotenv
+require_env SENSOR_SECRET_HEX MQTT_USERNAME MQTT_PASSWORD MQTT_BROKER_HOST
+
 source .venv/bin/activate
 
 export ZONE_ID="${ZONE_ID:-ZONE-01}"
-export MQTT_BROKER_HOST="${MQTT_BROKER_HOST:-192.168.2.32}"
+# MQTT_BROKER_HOST kommt aus .env (kein Vorgabewert: die IP des Leitstands ändert sich)
 export MQTT_BROKER_PORT="${MQTT_BROKER_PORT:-1883}"
 
 

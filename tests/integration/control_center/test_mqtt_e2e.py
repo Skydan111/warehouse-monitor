@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import os
+import secrets
 import subprocess
 import time
 from pathlib import Path
 
-import paho.mqtt.client as mqtt
+import mqtt_test_broker
 
 from shared.comm.envelope import EnvelopeV1, b64_from_bytes
 from shared.comm.topics import telemetry_topic
@@ -14,7 +15,6 @@ from shared.protocol.telemetry_csv import TelemetryUnsigned
 
 
 ROOT = Path(__file__).resolve().parents[3]  # Projektwurzel
-COMPOSE_FILE = ROOT / "docker-compose.mqtt.yml"
 
 RAW_FILE = ROOT / "data" / "raw" / "telemetry.csv"
 PROCESSED_FILE = ROOT / "data" / "processed" / "telemetry.csv"
@@ -74,20 +74,11 @@ def _wait_for_subscriber_ready(sub_proc: subprocess.Popen[str], timeout_s: float
         time.sleep(0.05)
 
 
-def test_mqtt_end_to_end_50_messages() -> None:
+def test_mqtt_end_to_end_50_messages(mqtt_broker) -> None:
     zone_id = "ZONE-01"
-    secret_hex = "deadbeef"
+    secret_hex = secrets.token_hex(32)
     topic = telemetry_topic(zone_id)
 
-    # --- Docker Broker hochfahren ---
-    subprocess.run(
-        ["docker", "compose", "-f", str(COMPOSE_FILE), "up", "-d"],
-        check=True,
-        cwd=str(ROOT),
-    )
-
-    # Broker braucht manchmal kurz zum "ready" werden
-    time.sleep(0.5)
 
     before_raw = _count_csv_lines(RAW_FILE)
     before_proc = _count_csv_lines(PROCESSED_FILE)
@@ -95,15 +86,8 @@ def test_mqtt_end_to_end_50_messages() -> None:
     before_quar = _count_csv_lines(QUAR_FILE)
 
     # --- Subscriber starten (als eigener Prozess) ---
-    env = os.environ.copy()
-    env["ZONE_ID"] = zone_id
-    env["SENSOR_SECRET_HEX"] = secret_hex
-    env["MQTT_BROKER_HOST"] = "localhost"
-    env["MQTT_BROKER_PORT"] = "1883"
-    env["DEDUP_CACHE_SIZE"] = "500"
-    env["MAX_SKEW_SECONDS"] = "120"
-    env["SECURITY_POLICY_PATH"] = "configs/security_policy.yaml"
-    env["PYTHONUNBUFFERED"] = "1"
+    # Leitstand meldet sich als control_center am Test-Broker an
+    env = mqtt_test_broker.subscriber_env(mqtt_broker, secret_hex, zone_id)
 
     sub_proc = subprocess.Popen(
         ["python", "-u", "control_center/src/control_center/mqtt_subscriber.py"],
@@ -120,8 +104,8 @@ def test_mqtt_end_to_end_50_messages() -> None:
         _wait_for_subscriber_ready(sub_proc, timeout_s=8.0)
 
         # --- MQTT Publisher (Test) ---
-        client = mqtt.Client(client_id="test-publisher")
-        client.connect("localhost", 1883, keepalive=30)
+        # Sender meldet sich als Zonensensor zone-01 an
+        client = mqtt_test_broker.zone_client(mqtt_broker, client_id="test-publisher")
         client.loop_start()
 
         n = 50
@@ -160,8 +144,9 @@ def test_mqtt_end_to_end_50_messages() -> None:
         try:
             _wait_until(lambda: _count_csv_lines(PROCESSED_FILE) >= before_proc + n, timeout_s=40.0)
         except AssertionError:
-            out = sub_proc.stdout.read() if sub_proc.stdout else ""
-            err = sub_proc.stderr.read() if sub_proc.stderr else ""
+            # Erst beenden, dann lesen: read() auf einem laufenden Prozess blockiert.
+            sub_proc.terminate()
+            out, err = sub_proc.communicate(timeout=5)
             raise AssertionError(f"Timeout waiting for processed lines.\nSTDOUT:\n{out}\nSTDERR:\n{err}")
 
         after_raw = _count_csv_lines(RAW_FILE)
@@ -183,9 +168,3 @@ def test_mqtt_end_to_end_50_messages() -> None:
             except subprocess.TimeoutExpired:
                 sub_proc.kill()
 
-        # Broker runterfahren
-        subprocess.run(
-            ["docker", "compose", "-f", str(COMPOSE_FILE), "down"],
-            check=False,
-            cwd=str(ROOT),
-        )

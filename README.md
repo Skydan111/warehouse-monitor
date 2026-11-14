@@ -96,6 +96,7 @@ Envelope → Dedup → Freshness → Verify → Decision → Routing
 | **Replay-Angriffe** | Freshness + Sliding Window | ts_utc ± MAX_SKEW, msg_id Dedup-Cache (LRU) |
 | **Duplicate Messages** | Deduplication | UUID v4 msg_id, Cache der letzten N Nachrichten |
 | **Wiederholte ungültige Versuche** | Adaptive Security (Lockout) | Gewichtete Fehlerzählung, Schwellwert-basierter Lockout |
+| **Unbefugter Zugriff auf den Broker** | Anmeldung + Zugriffsliste | Mosquitto ohne anonymen Zugang, Passwort je Gerät, ACL je Benutzer |
 
 ### HMAC-SHA256 Details
 
@@ -104,6 +105,16 @@ Envelope → Dedup → Freshness → Verify → Decision → Routing
 - **Signatur-Scope:** `ts,temperature_c,humidity_pct,pressure_hpa,mode`
 - **Ausgabe:** 64 Hex-Zeichen
 - **Verifikation:** `hmac.compare_digest()` (Constant-Time, Timing-Attack-resistent)
+
+### Geheimnisse und Broker-Zugang
+
+- **Geräteschlüssel:** nur aus der Umgebungsvariable `SENSOR_SECRET_HEX` (genau 64 Hex-Zeichen). Kein Vorgabewert, kein Rückfall auf eine Datei. Fehlt der Schlüssel oder ist er ungültig, starten Zonensensor und Leitstand nicht.
+- **Broker:** `allow_anonymous false`. Jeder Client meldet sich mit `MQTT_USERNAME`/`MQTT_PASSWORD` an. Bei falschen Zugangsdaten (CONNACK 4/5) beenden sich die Clients, statt endlos neu zu verbinden.
+- **Zugriffsliste** (`configs/mosquitto/acl`): `control_center` darf nur lesen, `zone-01` darf nur in `warehouse/v1/ZONE-01/telemetry` schreiben.
+- **Ablage:** Alle Geheimnisse stehen lokal in `.env` (chmod 600, von Git ausgeschlossen). Die Passwortdatei des Brokers enthält nur Hashes und ist ebenfalls nicht versioniert. Erzeugt werden alle Werte von `scripts/mqtt_provision.sh`.
+- **Grenze:** Kein TLS. Passwörter und Messwerte gehen im Klartext über das Netz. Die Anmeldung schützt vor zufälligem Zugriff, nicht vor jemandem, der das Netz mitschneidet.
+
+> **Früherer Schlüssel:** Ein älterer Geräteschlüssel stand bis November 2026 im Repository (Konfigurationsdatei, Startskript, Test). Er bleibt im Git-Verlauf sichtbar und gilt als kompromittiert. Er wurde auf allen Geräten ersetzt und darf nicht mehr verwendet werden.
 
 ### Anti-Replay Mechanismen
 
@@ -213,29 +224,46 @@ pip install -e zone_sensor
 pytest
 ```
 
-### MQTT Broker starten
+### Geheimnisse erzeugen (einmalig, auf dem Leitstand)
 
 ```bash
-docker compose -f docker-compose.mqtt.yml up -d
+./scripts/mqtt_provision.sh <IP des Leitstands>
 ```
 
-Broker läuft auf `localhost:1883`.
+Das Skript erzeugt einen neuen Geräteschlüssel und je ein Broker-Passwort für Leitstand und Zonensensor. Es schreibt sie direkt in Dateien und gibt keinen Wert aus:
 
-### Zonensensor starten
+| Datei | Zweck |
+|-------|-------|
+| `.env` | Leitstand: Schlüssel, Benutzer `control_center` |
+| `.env.zone-01` | Zonensensor: gleicher Schlüssel, Benutzer `zone-01`, Adresse des Brokers |
+| `configs/mosquitto/passwd` | gehashte Passwörter für den Broker |
+
+Vorhandene Dateien werden nur mit `--force` überschrieben. Danach sind alle alten Werte ungültig (Schlüsselwechsel).
+
+`.env.zone-01` wird auf dem Zonensensor als `.env` abgelegt, ohne den Inhalt anzuzeigen, und danach auf dem Leitstand gelöscht:
 
 ```bash
-./scripts/zone_sensor_start.sh
+ssh <benutzer>@<zonensensor> 'umask 077; cat > ~/warehouse-monitor/.env' < .env.zone-01
+rm .env.zone-01
 ```
 
-Der Zonensensor liest BME280 (oder Simulation), signiert Telemetrie und publisht via MQTT.
+Vorlage mit allen Variablen: `.env.example`.
 
-### Leitstand starten
+### Leitstand starten (zuerst)
 
 ```bash
 ./scripts/control_center_start.sh
 ```
 
-Der Leitstand abonniert das MQTT-Topic, verifiziert Signaturen und routet Daten.
+Das Skript lädt `.env`, startet den MQTT-Broker (Docker, Port 1883, nur mit Anmeldung) und den Subscriber. Ohne Schlüssel, Zugangsdaten oder Passwortdatei bricht es ab.
+
+### Zonensensor starten (danach)
+
+```bash
+./scripts/zone_sensor_start.sh
+```
+
+Der Zonensensor lädt `.env`, liest BME280 (oder Simulation), signiert Telemetrie und publiziert via MQTT.
 
 ### Logs prüfen
 
@@ -299,8 +327,19 @@ warehouse-monitor/
 │
 ├── configs/
 │   ├── zone_sensor.yaml            # Zonensensor-Konfiguration
-│   ├── control_center.json         # Leitstand-Konfiguration
-│   └── security_policy.yaml        # Security Policies (Lockout-Thresholds)
+│   ├── security_policy.yaml        # Security Policies (Lockout-Thresholds)
+│   └── mosquitto/
+│       ├── mosquitto.conf          # Broker: ohne anonymen Zugang
+│       ├── acl                     # Rechte je Benutzer
+│       └── passwd                  # gehashte Passwörter (lokal, nicht versioniert)
+│
+├── scripts/
+│   ├── mqtt_provision.sh           # Schlüssel und Broker-Passwörter erzeugen
+│   ├── control_center_start.sh     # Leitstand + Broker starten
+│   ├── zone_sensor_start.sh        # Zonensensor starten
+│   └── lib/env.sh                  # .env laden, Pflichtvariablen prüfen
+│
+├── .env.example                    # Vorlage für die lokale .env (ohne Werte)
 │
 ├── tests/
 │   ├── unit/

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import time
 import uuid
 from pathlib import Path
@@ -9,6 +10,7 @@ import paho.mqtt.client as mqtt
 
 from shared.comm.envelope import EnvelopeV1, b64_from_bytes
 from shared.comm.topics import telemetry_topic
+from shared.comm.mqtt_auth import FATAL_CONNECT_RC, connect_rc_text, load_mqtt_credentials
 
 
 def _env(name: str, default: str) -> str:
@@ -37,6 +39,24 @@ def is_data_line(line: str) -> bool:
     return True
 
 
+class ConnectState:
+    """Merkt sich das Ergebnis der Anmeldung (wird im MQTT-Thread gesetzt)."""
+
+    def __init__(self) -> None:
+        self.fatal_rc: int | None = None
+
+
+def on_connect(client: mqtt.Client, userdata: ConnectState, flags: dict, rc: int) -> None:
+    if rc == 0:
+        print("[zone_sensor] Connected.")
+        return
+    print(f"[zone_sensor] MQTT-Verbindung abgelehnt rc={rc}: {connect_rc_text(rc)}", file=sys.stderr)
+    if rc in FATAL_CONNECT_RC:
+        # Falsche oder fehlende Zugangsdaten behebt kein erneuter Versuch.
+        userdata.fatal_rc = rc
+        client.disconnect()
+
+
 def main() -> int:
     broker_host = _env("MQTT_BROKER_HOST", "localhost")
     broker_port = int(_env("MQTT_BROKER_PORT", "1883"))
@@ -46,11 +66,19 @@ def main() -> int:
 
     topic = telemetry_topic(zone_id)
 
-    client = mqtt.Client(client_id=f"zone-sensor-{zone_id}-file")
+    creds = load_mqtt_credentials()
+    state = ConnectState()
+
+    client = mqtt.Client(client_id=f"zone-sensor-{zone_id}-file", userdata=state)
+    client.username_pw_set(creds.username, creds.password)
+    client.on_connect = on_connect
     client.connect(broker_host, broker_port, keepalive=30)
     client.loop_start()
 
-    print(f"[zone_sensor] Publishing (follow file) to {topic} via mqtt://{broker_host}:{broker_port}")
+    print(
+        f"[zone_sensor] Publishing (follow file) to {topic} via mqtt://{broker_host}:{broker_port} "
+        f"(user={creds.username})"
+    )
     print(f"[zone_sensor] TELEMETRY_FILE={telemetry_file}")
 
     # Startmodus: "tail" -> nur neue Zeilen ab jetzt senden (nicht die Historie).
@@ -60,6 +88,9 @@ def main() -> int:
     try:
         # Warten, bis die Datei existiert (Logger könnte später starten)
         while not telemetry_file.exists():
+            if state.fatal_rc is not None:
+                print("[zone_sensor] Abbruch: Anmeldung am Broker fehlgeschlagen.", file=sys.stderr)
+                return 2
             print(f"[zone_sensor] Waiting for telemetry file: {telemetry_file}")
             time.sleep(1.0)
 
@@ -68,6 +99,10 @@ def main() -> int:
                 f.seek(0, 2)  # ans Dateiende springen
 
             while True:
+                if state.fatal_rc is not None:
+                    print("[zone_sensor] Abbruch: Anmeldung am Broker fehlgeschlagen.", file=sys.stderr)
+                    return 2
+
                 pos_before = f.tell()
                 line = f.readline()
 
