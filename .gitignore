@@ -3,6 +3,10 @@
 .env.*
 !.env.example
 
+# MQTT-Passwortdatei (Produktiv und Test)
+configs/mosquitto/passwd
+tests/.mqtt-test/
+
 # Python
 venv/
 __pycache__/

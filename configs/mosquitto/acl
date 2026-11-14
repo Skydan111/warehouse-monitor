@@ -1,0 +1,10 @@
+# Zugriffsliste des MQTT-Brokers
+# Nicht aufgeführte Topics sind für alle Benutzer gesperrt.
+
+# Leitstand: darf Telemetrie aller Zonen lesen, aber nichts senden
+user control_center
+topic read warehouse/v1/+/telemetry
+
+# Zonensensor ZONE-01: darf nur in das eigene Topic senden, nichts lesen
+user zone-01
+topic write warehouse/v1/ZONE-01/telemetry

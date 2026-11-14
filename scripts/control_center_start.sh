@@ -7,7 +7,15 @@ cd "$ROOT"
 # shellcheck source=lib/env.sh
 source "$ROOT/scripts/lib/env.sh"
 load_dotenv
-require_env SENSOR_SECRET_HEX
+require_env SENSOR_SECRET_HEX MQTT_USERNAME MQTT_PASSWORD
+
+# Ohne Passwortdatei würde Docker an ihrer Stelle ein leeres Verzeichnis anlegen.
+PASSWD_FILE="$ROOT/configs/mosquitto/passwd"
+if [[ ! -f "$PASSWD_FILE" || ! -s "$PASSWD_FILE" ]]; then
+  echo "[control_center_start] FEHLER: $PASSWD_FILE fehlt oder ist leer." >&2
+  echo "[control_center_start] Einmalig erzeugen: ./scripts/mqtt_provision.sh <IP dieses Rechners>" >&2
+  exit 1
+fi
 
 export ZONE_ID="${ZONE_ID:-ZONE-01}"
 

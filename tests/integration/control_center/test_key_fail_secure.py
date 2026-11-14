@@ -74,18 +74,71 @@ def test_start_script_aborts_without_key(tmp_path, script):
     assert not (root / ".run").exists()
 
 
-@pytest.mark.parametrize("script", ["control_center_start.sh", "zone_sensor_start.sh"])
-def test_start_script_never_prints_key(tmp_path, script):
-    # Schlüssel kommt aus .env; das Skript scheitert danach an der fehlenden venv,
-    # darf den Wert aber zu keinem Zeitpunkt ausgeben.
-    root = _copy_scripts(tmp_path)
-    key = secrets.token_hex(32)
-    (root / ".env").write_text(f"{ENV_NAME}={key}\n", encoding="utf-8")
-    env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)}
-    result = subprocess.run(
+def _write_env(root: Path, **values: str) -> None:
+    lines = [f"{k}={v}" for k, v in values.items()]
+    (root / ".env").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _run_script(root: Path, script: str) -> subprocess.CompletedProcess[str]:
+    # Minimaler PATH: kein docker, keine venv -> Skript kann nichts Echtes starten.
+    env = {"PATH": "/usr/bin:/bin", "HOME": str(root)}
+    return subprocess.run(
         ["bash", str(root / "scripts" / script)],
         cwd=str(root), env=env, capture_output=True, text=True, timeout=20,
     )
-    assert "SENSOR_SECRET_HEX nicht gesetzt" not in result.stderr
-    assert key not in result.stdout
-    assert key not in result.stderr
+
+
+@pytest.mark.parametrize("script", ["control_center_start.sh", "zone_sensor_start.sh"])
+def test_start_script_never_prints_secrets(tmp_path, script):
+    root = _copy_scripts(tmp_path)
+    key = secrets.token_hex(32)
+    password = secrets.token_urlsafe(24)
+    _write_env(root, SENSOR_SECRET_HEX=key, MQTT_USERNAME="zone-01",
+               MQTT_PASSWORD=password, MQTT_BROKER_HOST="192.0.2.1")
+
+    result = _run_script(root, script)
+
+    assert "nicht gesetzt" not in result.stderr
+    for secret in (key, password):
+        assert secret not in result.stdout
+        assert secret not in result.stderr
+
+
+@pytest.mark.parametrize(
+    "script, missing",
+    [
+        ("control_center_start.sh", "MQTT_USERNAME"),
+        ("control_center_start.sh", "MQTT_PASSWORD"),
+        ("zone_sensor_start.sh", "MQTT_USERNAME"),
+        ("zone_sensor_start.sh", "MQTT_PASSWORD"),
+        ("zone_sensor_start.sh", "MQTT_BROKER_HOST"),
+    ],
+)
+def test_start_script_aborts_without_mqtt_settings(tmp_path, script, missing):
+    root = _copy_scripts(tmp_path)
+    values = {"SENSOR_SECRET_HEX": secrets.token_hex(32), "MQTT_USERNAME": "u",
+              "MQTT_PASSWORD": "p", "MQTT_BROKER_HOST": "192.0.2.1"}
+    values.pop(missing)
+    _write_env(root, **values)
+
+    result = _run_script(root, script)
+
+    assert result.returncode == 1
+    assert f"{missing} nicht gesetzt" in result.stderr
+    assert not (root / ".run").exists()
+
+
+@pytest.mark.parametrize("make_dir", [False, True])
+def test_control_center_start_aborts_without_passwd_file(tmp_path, make_dir):
+    # make_dir=True: Docker hat beim früheren Start ohne Datei ein Verzeichnis angelegt.
+    root = _copy_scripts(tmp_path)
+    if make_dir:
+        (root / "configs" / "mosquitto" / "passwd").mkdir(parents=True)
+    _write_env(root, SENSOR_SECRET_HEX=secrets.token_hex(32),
+               MQTT_USERNAME="control_center", MQTT_PASSWORD="p")
+
+    result = _run_script(root, "control_center_start.sh")
+
+    assert result.returncode == 1
+    assert "passwd fehlt oder ist leer" in result.stderr
+    assert "Starting MQTT broker" not in result.stdout
