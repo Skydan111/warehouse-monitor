@@ -7,7 +7,7 @@
 mode: simulate
 
 # Pfad zur CSV-Datei für Telemetrie-Logs (relativ zum Projektroot)
-csv_path: logs/telemetry.csv
+csv_path: data/logs/telemetry.csv
 
 # Intervall zwischen zwei Messungen in Sekunden
 interval_sec: 60

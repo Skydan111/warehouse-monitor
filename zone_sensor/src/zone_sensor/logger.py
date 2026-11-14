@@ -22,7 +22,9 @@ def main():
 
     CSV_PATH = pathlib.Path(CFG["csv_path"])
     if not CSV_PATH.is_absolute():
-        CSV_PATH = HERE.parents[2] / CSV_PATH
+        CSV_PATH = (HERE.parents[2] / CSV_PATH).resolve()
+    else:
+        CSV_PATH = CSV_PATH.resolve()
     CSV_PATH.parent.mkdir(parents=True, exist_ok=True)
     sensor = BME280Reader()
     write_header_if_needed(CSV_PATH)

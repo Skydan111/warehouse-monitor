@@ -3,8 +3,10 @@ from datetime import datetime, timezone
 from shared.protocol.telemetry_csv import TelemetryUnsigned
 
 try:
-    import board, busio
-    import adafruit_bme280
+    import board
+    import busio
+    # Ab adafruit-circuitpython-bme280 2.6 liegt die Klasse im Untermodul `basic`.
+    from adafruit_bme280 import basic as adafruit_bme280
     _HW = True
 except Exception:
     _HW = False
