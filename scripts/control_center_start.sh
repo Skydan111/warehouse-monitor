@@ -33,7 +33,7 @@ if [[ -f "$PID_DIR/subscriber.pid" ]] && kill -0 "$(cat "$PID_DIR/subscriber.pid
 else
   echo "[control_center_start] Starting subscriber..."
 
-  nohup python control_center/src/control_center/mqtt_subscriber.py >"$SUB_LOG" 2>&1 &
+  nohup python -u control_center/src/control_center/mqtt_subscriber.py >"$SUB_LOG" 2>&1 &
   echo $! > "$PID_DIR/subscriber.pid"
   echo "[control_center_start] Subscriber pid=$(cat "$PID_DIR/subscriber.pid"), log=$SUB_LOG"
 fi

@@ -27,7 +27,7 @@ if [[ -f "$PID_DIR/logger.pid" ]] && kill -0 "$(cat "$PID_DIR/logger.pid")" 2>/d
   echo "[zone_sensor_start] Logger already running (pid=$(cat "$PID_DIR/logger.pid"))."
 else
   echo "[zone_sensor_start] Starting logger..."
-  nohup python -m zone_sensor.logger > logs/logger.log 2>&1 &
+  nohup python -u -m zone_sensor.logger > logs/logger.log 2>&1 &
   echo $! > "$PID_DIR/logger.pid"
   echo "[zone_sensor_start] Logger pid=$(cat "$PID_DIR/logger.pid"), log=logs/logger.log"
 fi
@@ -37,7 +37,7 @@ if [[ -f "$PID_DIR/publisher.pid" ]] && kill -0 "$(cat "$PID_DIR/publisher.pid")
   echo "[zone_sensor_start] Publisher already running (pid=$(cat "$PID_DIR/publisher.pid"))."
 else
   echo "[zone_sensor_start] Starting publisher_from_file..."
-  nohup python -m zone_sensor.mqtt_publisher_from_file > logs/publisher.log 2>&1 &
+  nohup python -u -m zone_sensor.mqtt_publisher_from_file > logs/publisher.log 2>&1 &
   echo $! > "$PID_DIR/publisher.pid"
   echo "[zone_sensor_start] Publisher pid=$(cat "$PID_DIR/publisher.pid"), log=logs/publisher.log"
 fi

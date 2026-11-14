@@ -2,3 +2,5 @@
 paho-mqtt==1.6.1
 # Für BME280
 adafruit-circuitpython-bme280==2.6.20
+# Für configs/zone_sensor.yaml
+pyyaml==6.0.1
