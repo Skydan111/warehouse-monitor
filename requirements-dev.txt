@@ -1,1 +1,3 @@
 pytest
+# HTTP-Client für fastapi.testclient (Dashboard-Tests)
+httpx2==2.16.2
