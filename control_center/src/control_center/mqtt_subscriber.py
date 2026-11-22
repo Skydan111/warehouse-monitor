@@ -10,6 +10,7 @@ import paho.mqtt.client as mqtt
 from shared.comm.envelope import EnvelopeV1, bytes_from_b64
 from shared.comm.topics import telemetry_topic
 from shared.comm.mqtt_auth import FATAL_CONNECT_RC, connect_rc_text, load_mqtt_credentials
+from shared.comm.mqtt_reconnect import configure_reconnect
 from shared.protocol.signed_csv import parse_signed_line, verify_signed_line
 from shared.crypto.secret_env import load_sensor_secret_hex
 from control_center.mqtt_guard import GuardConfig, MqttMessageGuard, RateLimitConfig, RateLimiter
@@ -39,6 +40,8 @@ def on_connect(client: mqtt.Client, userdata: object, flags: dict, rc: int) -> N
             client.disconnect()
         return
 
+    # Wird nach JEDER (Wieder-)Verbindung aufgerufen: Abo neu setzen,
+    # denn mit clean_session=True vergisst der Broker es beim Abbruch.
     print(f"[control_center] Connected. Subscribing to {topic}")
     client.subscribe(topic, qos=1)
 
@@ -230,13 +233,17 @@ def main() -> int:
     client.username_pw_set(creds.username, creds.password)
     client.on_connect = on_connect
     client.on_message = on_message
+    configure_reconnect(client, "[control_center]")
 
     print(
         f"[control_center] Connecting to mqtt://{broker_host}:{broker_port} "
         f"(zone_id={zone_id}, user={creds.username})"
     )
-    client.connect(broker_host, broker_port, keepalive=30)
-    client.loop_forever()
+    # connect_async + retry_first_connection: Ist der Broker beim Start noch
+    # nicht bereit (z. B. direkt nach docker compose up -d), wird gewartet
+    # statt mit ConnectionRefusedError abzubrechen.
+    client.connect_async(broker_host, broker_port, keepalive=30)
+    client.loop_forever(retry_first_connection=True)
 
     if userdata["fatal_rc"] is not None:
         print("[control_center] Abbruch: Anmeldung am Broker fehlgeschlagen.", file=sys.stderr)

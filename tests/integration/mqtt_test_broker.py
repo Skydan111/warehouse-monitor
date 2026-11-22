@@ -90,6 +90,26 @@ def start() -> TestBroker:
     return TestBroker(host=HOST, port=PORT, control_center=cc, zone=zone)
 
 
+def wait_ready(broker: TestBroker, timeout_s: float = 20.0) -> None:
+    """Wartet, bis der Broker Anmeldungen annimmt."""
+    deadline = time.monotonic() + timeout_s
+    while connect_rc(broker.host, broker.port, broker.control_center, timeout_s=1.0) != 0:
+        if time.monotonic() > deadline:
+            raise RuntimeError("Test-Broker nicht bereit")
+        time.sleep(0.3)
+
+
+def pause() -> None:
+    """Hält den Test-Broker an; Passwortdatei bleibt erhalten (für Wiederverbindungstests)."""
+    subprocess.run(["docker", "compose", "-f", str(COMPOSE_FILE), "down"], check=True, cwd=str(ROOT))
+
+
+def resume(broker: TestBroker) -> None:
+    """Startet den angehaltenen Test-Broker mit denselben Zugangsdaten wieder."""
+    subprocess.run(["docker", "compose", "-f", str(COMPOSE_FILE), "up", "-d"], check=True, cwd=str(ROOT))
+    wait_ready(broker)
+
+
 def stop() -> None:
     subprocess.run(["docker", "compose", "-f", str(COMPOSE_FILE), "down"], check=False, cwd=str(ROOT))
     shutil.rmtree(WORK_DIR, ignore_errors=True)
