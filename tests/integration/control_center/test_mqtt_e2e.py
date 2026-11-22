@@ -4,6 +4,7 @@ import os
 import secrets
 import subprocess
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import mqtt_test_broker
@@ -110,10 +111,13 @@ def test_mqtt_end_to_end_50_messages(mqtt_broker) -> None:
 
         n = 50
         infos = []
-        for _ in range(n):
+        for i in range(n):
+            # Wie beim echten Zonensensor: jede Messung hat einen eigenen Zeitstempel
+            # (Mikrosekunden) und damit eine eigene Signatur. Identische Messungen
+            # wären Duplikate und würden seit der Duplikatprüfung auf der Signatur verworfen.
             unsigned = TelemetryUnsigned(
-                ts=EnvelopeV1.now_utc_iso(),
-                temperature_c=22.5,
+                ts=datetime.now(timezone.utc).isoformat(),
+                temperature_c=22.5 + i / 100,
                 humidity_pct=45.0,
                 pressure_hpa=1013.2,
                 mode="NOMINAL",

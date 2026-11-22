@@ -29,7 +29,7 @@ def _count(path: Path) -> int:
     )
 
 
-def test_mqtt_replay_drop_duplicate_and_log(mqtt_broker) -> None:
+def test_mqtt_replay_with_new_envelope_is_dropped(mqtt_broker) -> None:
     zone_id = "ZONE-01"
     secret_hex = secrets.token_hex(32)
     topic = telemetry_topic(zone_id)
@@ -66,14 +66,14 @@ def test_mqtt_replay_drop_duplicate_and_log(mqtt_broker) -> None:
         signed_line = format_signed_line(unsigned, secret_hex)
         payload_b64 = b64_from_bytes(signed_line.encode("utf-8"))
 
-        # Gleicher msg_id zweimal -> 2. Mal muss DROP_DUPLICATE sein
-        msg_id = "replay-001"
-
+        # Angriff: dieselbe signierte Nutzlast in einem NEUEN Envelope
+        # (neue msg_id, neue Sendezeit). Die alte Prüfung auf msg_id/ts_utc
+        # hätte das durchgelassen; die Prüfung auf der Signatur erkennt es.
         env_msg_1 = EnvelopeV1(
             v="1",
             zone_id=zone_id,
             msg_type="telemetry",
-            msg_id=msg_id,
+            msg_id="original-001",
             ts_utc=EnvelopeV1.now_utc_iso(),
             qos=1,
             payload_b64=payload_b64,
@@ -82,10 +82,10 @@ def test_mqtt_replay_drop_duplicate_and_log(mqtt_broker) -> None:
             v="1",
             zone_id=zone_id,
             msg_type="telemetry",
-            msg_id=msg_id,  # gleiche ID!
-            ts_utc=EnvelopeV1.now_utc_iso(),
+            msg_id="replay-002",  # neue Kennung
+            ts_utc=EnvelopeV1.now_utc_iso(),  # neue Sendezeit
             qos=1,
-            payload_b64=payload_b64,
+            payload_b64=payload_b64,  # gleiche signierte Nutzlast
         )
 
         info1 = client.publish(topic, payload=env_msg_1.to_json(), qos=1, retain=False)
@@ -120,6 +120,6 @@ def test_mqtt_replay_drop_duplicate_and_log(mqtt_broker) -> None:
 
 
     combined = (out + "\n" + err).lower()
-    assert "drop_duplicate" in combined or "duplicate" in combined, (
+    assert "drop_duplicate msg_id=replay-002" in combined, (
         f"Expected replay to be logged as duplicate. Output was:\nSTDOUT:\n{out}\nSTDERR:\n{err}"
     )

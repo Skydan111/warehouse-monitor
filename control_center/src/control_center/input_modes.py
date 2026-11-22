@@ -28,7 +28,8 @@ def receive_simulated(n: int = 3, secman: Optional[object] = None, quarantine_pa
 def receive_from_file(
         path: Path, guard: Optional[MqttMessageGuard] = None, secman: Optional[object] = None, quarantine_path: Optional[Path] = None) -> None:
     """Liest eine CSV-Datei und verarbeitet sie Zeile für Zeile."""
-    # TODO: apply guard.is_duplicate() and guard.is_fresh() per line (pkt 6)
+    # Bekannte Lücke (Doku 4.4): Dieser Weg prüft nur die Signatur,
+    # nicht Frische und Duplikate wie der MQTT-Empfang.
     if not path.exists():
         raise SystemExit(f"[ERR] Datei nicht gefunden: {path}")
     same_as_raw = path.resolve() == RAW_PATH.resolve()
