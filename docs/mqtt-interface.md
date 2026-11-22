@@ -85,37 +85,39 @@ Felder:
 
 ### Verifikation (Leitstand)
 
-Reihenfolge der Verarbeitung im Leitstand:
+Reihenfolge der Verarbeitung im Leitstand (`mqtt_subscriber.process_message`):
 
 1. Envelope JSON validieren
-   (Pflichtfelder vorhanden, `v == "1"`).
+   (Pflichtfelder vorhanden, `v == "1"`, `zone_id` = eigene Zone, `msg_type == "telemetry"`)
+   → sonst **drop**, `malformed_packet` an den SecurityManager.
 
-2. Dedup prüfen
-   (`msg_id` bereits gesehen → **drop + log**).
+2. Paketrate der Zone prüfen (eigener Branch).
 
-3. Freshness prüfen
-   (`ts_utc` innerhalb erlaubtem Zeitfenster → sonst **drop + log**).
+3. Signed Payload aus `payload_b64` decodieren (Base64 streng, UTF-8, 6 Felder)
+   → sonst `corrupt_payload` bzw. `malformed_packet` (letzteres in *rejected*).
 
-4. Signed Payload aus payload_b64 decodieren.
+4. Signatur/HMAC über die Logik in `shared/` verifizieren
+   → sonst *rejected*, `invalid_signature`.
 
-5. Signatur/HMAC über bestehende shared/ Logik verifizieren.
+5. Freshness auf dem **signierten** Zeitstempel `ts`
+   (± MAX_SKEW_SECONDS, Standard 120 s) → sonst **drop + Audit** (`stale`).
 
-6. Nur bei erfolgreicher Verifikation:
-   Übergabe an die Receiver Pipeline.
+6. Dedup auf der **Signatur** → bereits gesehen: **drop + Audit** (`duplicate`).
+
+7. Lockout-Check → bei aktivem Lockout *quarantine*, sonst *processed*.
 
 ---
 
 ### Anti-Replay / Dedup
 
-- Der Leitstand hält pro zone_id einen LRU-Cache der letzten N msg_id
-  (z. B. `N = 500`).
+- `msg_id` und `ts_utc` des Envelopes sind **nicht signiert** und dienen nur
+  der Diagnose (Logs). Sie werden für Sicherheitsentscheidungen nicht verwendet.
 
-- Wenn msg_id bereits vorhanden ist →
-  Nachricht wird verworfen (**Duplicate**).
+- Der Leitstand hält einen gemeinsamen LRU-Cache der letzten N Signaturen
+  (`DEDUP_CACHE_SIZE`, Standard 500) für alle Zonen.
 
-- Zusätzlich wird ein Zeitfenster MAX_SKEW_SECONDS
-  (z. B. 120 Sekunden) geprüft.
-  Wenn ts_utc zu alt oder zu weit in der Zukunft liegt → verwerfen.
+- Fehler aus Schritt 1, 3 und 4 zählen für den Lockout.
+  `stale` und `duplicate` zählen nicht (QoS-1-Wiederholung, Nachsenden nach Störung).
 
 ---
 
