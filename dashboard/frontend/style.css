@@ -60,18 +60,19 @@
 
 html,
 body {
-  height: 100%;
-  overflow: hidden;
+  min-height: 100%;
   background: var(--bg);
   color: var(--text);
   font-family: var(--sans);
 }
 
+/* Höhe richtet sich nach dem Inhalt: Auf niedrigen Bildschirmen (z. B.
+   Beamer 1280×720) wird die Seite gescrollt statt abgeschnitten. */
 .layout {
-  display: grid;
-  grid-template-rows: 60px 135px 260px 85px minmax(110px, 1fr);
-  height: 100vh;
-  padding: 22px 30px 14px;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  padding: 22px 30px 18px;
   gap: 10px;
 }
 
@@ -238,7 +239,8 @@ header {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
-  min-height: 0;
+  /* 240 px auf kleinen, bis 300 px auf hohen Bildschirmen */
+  height: clamp(240px, 30vh, 300px);
 }
 
 .chart-card {
@@ -274,8 +276,6 @@ header {
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 12px 18px;
-  min-height: 0;
-  overflow: hidden;
 }
 
 .section-title {
@@ -320,12 +320,10 @@ header {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 12px 18px;
+  padding: 14px 18px;
   display: flex;
-  align-items: center;
+  align-items: flex-start; /* Beschriftung und Knopf oben links */
   gap: 16px;
-  min-height: 0;
-  overflow: hidden;
 }
 
 .ai-left {
@@ -359,14 +357,14 @@ header {
 
 .ai-divider {
   width: 1px;
-  height: 32px;
+  align-self: stretch;
   background: var(--border);
   flex-shrink: 0;
 }
 
 #ai-output {
   font-family: var(--sans);
-  font-size: 0.8rem;
+  font-size: 0.85rem;
   color: var(--muted);
   line-height: 1.6;
 }
@@ -377,9 +375,8 @@ header {
 
 #ai-output {
   flex: 1;
-  align-self: stretch;
-  overflow-y: auto;
-  white-space: pre-wrap;
+  /* lesbare Zeilenlänge, auch auf breiten Bildschirmen */
+  max-width: 110ch;
 }
 
 #ai-output.error {
@@ -407,6 +404,7 @@ header {
 
 .ai-report {
   margin-top: 6px;
+  white-space: pre-wrap; /* Absätze des Berichts erhalten */
 }
 
 .stats-period {
