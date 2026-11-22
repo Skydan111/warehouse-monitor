@@ -109,6 +109,8 @@ def subscriber_env(broker: TestBroker, secret_hex: str, zone_id: str = "ZONE-01"
         "MQTT_PASSWORD": broker.control_center.password,
         "DEDUP_CACHE_SIZE": "500",
         "MAX_SKEW_SECONDS": "120",
+        "RATE_LIMIT_MAX_MESSAGES": "10",
+        "RATE_LIMIT_WINDOW_SECONDS": "60",
         "SECURITY_POLICY_PATH": "configs/security_policy.yaml",
         "PYTHONUNBUFFERED": "1",
     })

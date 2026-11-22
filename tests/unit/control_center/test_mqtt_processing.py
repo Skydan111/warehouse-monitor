@@ -5,7 +5,8 @@ Belegt:
  - Replay mit neuem Envelope wird erkannt (Abgleichliste 15),
  - Frische wird am signierten Zeitstempel geprüft, nicht am Envelope,
  - Fehler aus dem MQTT-Empfang erreichen den SecurityManager und REJECTED (Abgleichliste 4),
- - Reihenfolge: Envelope → Signatur → Frische → Duplikat → Lockout (Abgleichliste 6).
+ - Reihenfolge: Envelope → Paketrate → Signatur → Frische → Duplikat → Lockout (Abgleichliste 6),
+ - Paketrate je Zone: Flut wird vor HMAC und ohne Plattenzugriff verworfen (Abgleichliste 7).
 
 Alle Dateien liegen in tmp_path; das echte data/-Verzeichnis bleibt unberührt.
 """
@@ -20,7 +21,7 @@ from pathlib import Path
 import pytest
 
 from control_center import input_modes, mqtt_subscriber as sub, packet_pipeline
-from control_center.mqtt_guard import GuardConfig, MqttMessageGuard
+from control_center.mqtt_guard import GuardConfig, MqttMessageGuard, RateLimitConfig, RateLimiter
 from control_center.security.security_manager import SecurityManager
 from shared.comm.envelope import EnvelopeV1, b64_from_bytes
 from shared.protocol.signed_csv import format_signed_line
@@ -259,6 +260,8 @@ def test_stale_message_does_not_enter_duplicate_memory(ctx, secret):
 
 def test_duplicates_and_stale_do_not_trigger_lockout(ctx, paths, secret, secman):
     # QoS 1 darf Nachrichten mehrfach zustellen; nach einer Störung kommen alte Werte nach.
+    # 21 Nachrichten in Folge: Paketrate hier hochsetzen, sie wird in eigenen Tests geprüft.
+    ctx.rate_limiter = RateLimiter(RateLimitConfig(max_messages=100))
     line = signed_line(secret)
     sub.process_message(envelope(line), ctx)
     for _ in range(10):
@@ -270,6 +273,79 @@ def test_duplicates_and_stale_do_not_trigger_lockout(ctx, paths, secret, secman)
     assert not secman.is_locked()
     dropped = [e["reason"] for e in audit(paths["audit"]) if e["event"] == "dropped"]
     assert dropped.count("duplicate") == 10 and dropped.count("stale") == 10
+
+
+# ---------------------------------------------------------------- Paketrate (Schritt 2)
+
+def _audit_rate_limited(path: Path) -> list[dict]:
+    return [e for e in audit(path) if e["event"] == "dropped" and e["reason"] == sub.OUTCOME_RATE_LIMITED]
+
+
+def test_15_messages_in_a_row_10_accepted_5_rate_limited_without_hmac(ctx, paths, secret, secman, monkeypatch):
+    calls = {"verify": 0}
+    real_verify = sub.verify_signed_line
+
+    def counting_verify(*a, **kw):
+        calls["verify"] += 1
+        return real_verify(*a, **kw)
+
+    monkeypatch.setattr(sub, "verify_signed_line", counting_verify)
+
+    outcomes = [sub.process_message(envelope(signed_line(secret)), ctx) for _ in range(15)]
+
+    assert outcomes == [sub.OUTCOME_ACCEPTED] * 10 + [sub.OUTCOME_RATE_LIMITED] * 5
+    assert calls["verify"] == 10                     # keine HMAC-Prüfung für die 5 verworfenen
+    assert len(lines(paths["raw"])) == 10            # kein Schreibzugriff für die 5 verworfenen
+    assert len(lines(paths["processed"])) == 10
+    assert lines(paths["rejected"]) == []
+    assert not secman.is_locked()
+
+
+def test_forged_flood_is_cut_before_signature_and_does_not_lock_zone(ctx, paths, secret, secman):
+    # Die ersten 10 Nachrichten sind echt; danach eine Flut mit falscher Signatur.
+    for _ in range(10):
+        assert sub.process_message(envelope(signed_line(secret)), ctx) == sub.OUTCOME_ACCEPTED
+    for _ in range(30):
+        assert sub.process_message(envelope(tamper(signed_line(secret))), ctx) == sub.OUTCOME_RATE_LIMITED
+
+    assert lines(paths["rejected"]) == []            # Flut erreicht REJECTED nicht
+    assert not secman.is_locked()                    # verworfen durch Paketrate zählt nicht für Lockout
+    verify_events = [e for e in audit(paths["audit"]) if e["event"] != "dropped"]
+    assert all(e["ok"] for e in verify_events)       # keine Fehlschläge an den SecurityManager
+
+
+def test_rate_limited_drops_are_logged_once_per_window(paths, secret, secman):
+    clock = [1000.0]
+    ctx = sub.MessageContext(
+        zone_id=ZONE, secret_hex=secret, guard=MqttMessageGuard(GuardConfig()),
+        secman=secman, quarantine_path=paths["quarantine"],
+        rate_limiter=RateLimiter(RateLimitConfig(max_messages=10, window_seconds=60), clock=lambda: clock[0]),
+    )
+    for _ in range(10):
+        sub.process_message(envelope(signed_line(secret)), ctx)
+    for _ in range(40):                              # 40 verworfene innerhalb von 40 s
+        clock[0] += 1
+        assert sub.process_message(envelope(signed_line(secret)), ctx) == sub.OUTCOME_RATE_LIMITED
+
+    entries = _audit_rate_limited(paths["audit"])
+    assert len(entries) == 1                         # eine Meldung im laufenden Fenster, nicht 40
+    assert entries[0]["meta"]["limit"] == "10/60s"
+
+    clock[0] += 60                                   # Flut vorbei
+    assert sub.process_message(envelope(signed_line(secret)), ctx) == sub.OUTCOME_ACCEPTED
+    entries = _audit_rate_limited(paths["audit"])
+    assert len(entries) == 2                         # Abschlussmeldung mit dem Rest
+    assert sum(e["meta"]["count"] for e in entries) == 40
+    assert not secman.is_locked()
+
+
+def test_malformed_envelope_is_checked_before_rate_limit(ctx, paths, secret, secman):
+    # Schritt 1 vor Schritt 2: Envelopes anderer Zonen verbrauchen das Kontingent nicht.
+    # Kontingent 1 und nur 3 Fehler (unter der Lockout-Schwelle von 5 in Folge).
+    ctx.rate_limiter = RateLimiter(RateLimitConfig(max_messages=1))
+    for _ in range(3):
+        assert sub.process_message(envelope(signed_line(secret), zone_id="ZONE-99"), ctx) == sub.OUTCOME_MALFORMED
+    assert sub.process_message(envelope(signed_line(secret)), ctx) == sub.OUTCOME_ACCEPTED
 
 
 def test_on_message_never_raises(ctx):

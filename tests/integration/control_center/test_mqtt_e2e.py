@@ -89,6 +89,9 @@ def test_mqtt_end_to_end_50_messages(mqtt_broker) -> None:
     # --- Subscriber starten (als eigener Prozess) ---
     # Leitstand meldet sich als control_center am Test-Broker an
     env = mqtt_test_broker.subscriber_env(mqtt_broker, secret_hex, zone_id)
+    # 50 Nachrichten in wenigen Sekunden: Paketrate hochsetzen.
+    # Die Begrenzung selbst prüft test_mqtt_rate_limit.py.
+    env["RATE_LIMIT_MAX_MESSAGES"] = "1000"
 
     sub_proc = subprocess.Popen(
         ["python", "-u", "control_center/src/control_center/mqtt_subscriber.py"],
