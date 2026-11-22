@@ -113,20 +113,23 @@ def handle_verified_line(
     secman: Optional[object] = None,
     source: str = "unknown",
     quarantine_path: Optional[Path] = None
-) -> None:
+) -> bool:
     """
     Verarbeitet eine bereits verifizierte Telemetrie-Zeile (Signatur wurde extern geprüft).
     Beibehält Lockout-Logik und Pipeline-Routing (PROCESSED / QUARANTINE / REJECTED).
+
+    Rückgabe: True, wenn die Zeile in PROCESSED abgelegt wurde; False, wenn sie
+    wegen eines aktiven Lockouts anders behandelt wurde (oder leer war).
     """
     if not line.strip():
-        return
+        return False
 
     pkt_id = (line.split(",", 1)[0] or f"ts-{int(datetime.datetime.now(datetime.UTC).timestamp())}").strip()
     meta = {"source": source, "packet_id": pkt_id, "len": len(line), "transport": "mqtt"}
 
     # 0) Lockout vor Verarbeitung prüfen (wie in handle_line)
     if not check_lockout(pkt_id, line, meta, secman, quarantine_path):
-        return
+        return False
 
     # 1) SecurityManager informieren: ok=true (weil Signatur schon geprüft wurde)
     if secman and hasattr(secman, "on_verification_result"):
@@ -135,3 +138,4 @@ def handle_verified_line(
     # 2) Routing: verifizierte Zeile -> PROCESSED
     append_line(PROC_PATH, line, csv_header=CSV_HEADER)
     print("[OK] processed (mqtt)")
+    return True

@@ -57,4 +57,6 @@ def b64_from_bytes(data: bytes) -> str:
 
 def bytes_from_b64(data_b64: str) -> bytes:
     # Decodiert Base64 String zurück nach Bytes.
-    return base64.b64decode(data_b64.encode("ascii"))
+    # validate=True: ungültige Zeichen führen zu einem Fehler, statt still
+    # übersprungen zu werden (sonst würde z. B. "@@@" zu einer leeren Nutzlast).
+    return base64.b64decode(data_b64.encode("ascii"), validate=True)

@@ -173,6 +173,19 @@ class SecurityManager:
         # Audit-Log (JSONL)
         self._audit("verify_result", ok=ok, reason=reason, meta=meta)
 
+    def on_dropped(self, reason: str, meta: Dict[str, Any]):
+        """
+        Protokolliert eine verworfene Nachricht mit GÜLTIGER Signatur
+        (z. B. "stale" oder "duplicate").
+
+        Diese Ereignisse zählen bewusst nicht für den Lockout: Bei QoS 1 darf
+        der Broker eine Nachricht erneut zustellen, und nach einer
+        Verbindungsunterbrechung können ältere Messwerte nachkommen. Beides
+        ist kein Angriff. Sie erscheinen aber im Security- und Audit-Log.
+        """
+        self._logger.info(f"dropped reason={reason} meta={self._safe_meta(meta)}")
+        self._audit("dropped", ok=False, reason=reason, meta=meta)
+
     # ----------------------------------------------------------
     # Interne Logik
     # ----------------------------------------------------------

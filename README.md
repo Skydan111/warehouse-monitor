@@ -10,8 +10,8 @@ Ein Zonensensor (Raspberry Pi mit BME280) misst Temperatur und Luftfeuchtigkeit 
 
 - **End-to-End Systemdesign** — Vollständige Datenkette von Sensordatenerfassung bis zur verifizierten Speicherung
 - **HMAC-SHA256 Integritätsschutz** — Kryptographische Absicherung gegen Payload-Manipulation
-- **Deduplication** — Erkennung und Verwerfung doppelter Nachrichten (msg_id Cache)
-- **Freshness / Anti-Replay** — Zeitbasierte Verifikation zur Verhinderung von Replay-Angriffen
+- **Deduplication** — Erkennung doppelter Nachrichten anhand der HMAC-Signatur
+- **Freshness / Anti-Replay** — Prüfung des signierten Zeitstempels gegen Replay-Angriffe
 - **Routing-Pipeline** — Automatische Klassifikation in processed / rejected / quarantine
 - **Adaptive Security** — Lockout-Mechanismus bei wiederholten Sicherheitsverletzungen
 - **Testabdeckung** — 52 Tests (Unit, Integration, Security) mit vollständiger CI-Fähigkeit
@@ -48,16 +48,16 @@ Ein Zonensensor (Raspberry Pi mit BME280) misst Temperatur und Luftfeuchtigkeit 
 │  MQTT Subscriber                    │
 │           ↓                         │
 │  Envelope Validation                │
-│  (Schema, Required Fields)          │
-│           ↓                         │
-│  Deduplication                      │
-│  (msg_id LRU Cache)                 │
-│           ↓                         │
-│  Freshness Check                    │
-│  (ts_utc ± MAX_SKEW)                │
+│  (Schema, Pflichtfelder, Zone)      │
 │           ↓                         │
 │  HMAC Verification                  │
 │  (Constant-Time Compare)            │
+│           ↓                         │
+│  Freshness Check                    │
+│  (signierter ts ± MAX_SKEW)         │
+│           ↓                         │
+│  Deduplication                      │
+│  (Signatur, LRU Cache)              │
 │           ↓                         │
 │  Decision & Routing                 │
 │  • Lockout-Check                    │
@@ -72,7 +72,7 @@ Ein Zonensensor (Raspberry Pi mit BME280) misst Temperatur und Luftfeuchtigkeit 
 
 **Verarbeitungs-Pipeline:**
 ```
-Envelope → Dedup → Freshness → Verify → Decision → Routing
+Envelope → Verify → Freshness → Dedup → Decision → Routing
                                   ↓         ↓
                               rejected  lockout?
                                           ↓
@@ -93,8 +93,8 @@ Envelope → Dedup → Freshness → Verify → Decision → Routing
 | Bedrohung | Kontrolle | Implementierung |
 |-----------|-----------|-----------------|
 | **Payload-Manipulation** | HMAC-SHA256 | Signatur über kanonischen Payload, Constant-Time Verify |
-| **Replay-Angriffe** | Freshness + Sliding Window | ts_utc ± MAX_SKEW, msg_id Dedup-Cache (LRU) |
-| **Duplicate Messages** | Deduplication | UUID v4 msg_id, Cache der letzten N Nachrichten |
+| **Replay-Angriffe** | Freshness + Deduplication auf signierten Daten | signierter `ts` ± MAX_SKEW, Signatur im Dedup-Cache (LRU) |
+| **Duplicate Messages** | Deduplication | Signatur der Nutzlast, Cache der letzten 500 Signaturen |
 | **Wiederholte ungültige Versuche** | Adaptive Security (Lockout) | Gewichtete Fehlerzählung, Schwellwert-basierter Lockout |
 | **Unbefugter Zugriff auf den Broker** | Anmeldung + Zugriffsliste | Mosquitto ohne anonymen Zugang, Passwort je Gerät, ACL je Benutzer |
 
@@ -118,15 +118,19 @@ Envelope → Dedup → Freshness → Verify → Decision → Routing
 
 ### Anti-Replay Mechanismen
 
-**1. Freshness Check (Transport-Layer)**
-- Envelope-Timestamp `ts_utc` wird gegen Systemzeit geprüft
-- Erlaubter Skew: ± 120 Sekunden (konfigurierbar)
-- Zu alte oder zukünftige Nachrichten werden verworfen
+Beide Prüfungen arbeiten auf **signierten** Daten und laufen erst **nach** der Signaturprüfung. Die Felder des Envelopes (`msg_id`, `ts_utc`) sind nicht signiert: Ein Angreifer könnte eine mitgeschnittene Nutzlast in einen neuen Envelope legen.
 
-**2. Deduplication (msg_id Cache)**
-- Jede Nachricht hat eindeutige `msg_id` (UUID v4)
-- Der Leitstand hält LRU-Cache der letzten 500 msg_id
-- Duplicate → Drop + Audit-Log
+**1. Freshness Check**
+- Zeitstempel `ts` aus der signierten Nutzlast wird gegen die Systemzeit geprüft
+- Erlaubter Skew: ± 120 Sekunden (konfigurierbar)
+- Zu alte oder zukünftige Nachrichten werden verworfen (Audit-Log, zählt nicht für den Lockout)
+
+**2. Deduplication (Signatur-Cache)**
+- Schlüssel ist die HMAC-Signatur der Nutzlast, ein gemeinsamer Cache für alle Zonen (`zone_id` ist nicht signiert)
+- Der Leitstand hält einen LRU-Cache der letzten 500 Signaturen
+- Duplicate → Drop + Audit-Log (zählt nicht für den Lockout, weil QoS 1 legitim doppelt zustellt)
+
+**Grenze:** Messwerte, die nach einer Verbindungsstörung mehr als 120 Sekunden alt beim Leitstand ankommen, werden verworfen. Sie bleiben in der CSV-Datei auf dem Zonensensor erhalten.
 
 ### Adaptive Security
 

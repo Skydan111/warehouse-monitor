@@ -24,8 +24,8 @@ Der Fokus liegt auf:
 | Bedrohung | Beschreibung | Kontrolle | Layer |
 |-----------|--------------|-----------|-------|
 | **Payload-Manipulation** | Angreifer ändert Telemetriedaten während der Übertragung | HMAC-SHA256 Signaturprüfung | Application |
-| **Replay-Angriffe** | Angreifer sendet alte Nachrichten erneut | Freshness Check + msg_id Deduplication | Transport + Application |
-| **Duplicate Messages** | Netzwerk/Broker sendet Nachricht mehrfach (QoS 1) | msg_id Deduplication (LRU Cache) | Transport |
+| **Replay-Angriffe** | Angreifer sendet alte Nachrichten erneut, auch in neuem Envelope | Freshness auf signiertem `ts` + Deduplication auf der Signatur | Application |
+| **Duplicate Messages** | Netzwerk/Broker sendet Nachricht mehrfach (QoS 1) | Deduplication auf der Signatur (LRU Cache) | Application |
 | **Wiederholte ungültige Versuche** | Angreifer sendet kontinuierlich ungültige Nachrichten | Adaptive Security (Lockout) | Application |
 | **Malformed Packets** | Beschädigte oder absichtlich fehlerhafte Nachrichten | Schema-Validierung, Fehlerbehandlung | Application |
 | **Unbefugter Zugriff auf den Broker** | Fremder Client sendet oder liest mit | Anmeldung, Passwort je Gerät, ACL je Benutzer | Broker |
@@ -133,80 +133,59 @@ Bis November 2026 stand ein Geräteschlüssel im Repository: in `configs/control
 
 ---
 
-## Anti-Replay: Freshness + Sliding Window
+## Prüfkette und Anti-Replay im MQTT-Empfang
 
-Replay-Schutz erfolgt auf **zwei Ebenen**:
+### Reihenfolge
 
-### 1. Freshness Check (Transport-Layer)
+Implementiert in `control_center/mqtt_subscriber.py` (`process_message`):
 
-**Mechanismus:**
-- Envelope-Feld `ts_utc` wird mit aktueller Zeit verglichen
-- Erlaubter Skew: ± MAX_SKEW_SECONDS (z.B. 120 Sekunden)
+| Schritt | Prüfung | Bei Fehler | Zählt für Lockout |
+|---------|---------|------------|-------------------|
+| 1 | Envelope: JSON, `v == "1"`, Pflichtfelder, `zone_id` = eigene Zone, `msg_type == "telemetry"` | verwerfen, `malformed_packet` | ja (0,8) |
+| 2 | Paketrate der Zone | *(eigener Branch)* | – |
+| 3 | Nutzlast: Base64 (streng), UTF-8 | verwerfen, `corrupt_payload` | ja (0,6) |
+| 3 | Nutzlast: 6 Felder, Zahlen lesbar | *rejected*, `malformed_packet` | ja (0,8) |
+| 4 | HMAC-Signatur | *rejected*, `invalid_signature` | ja (1,0) |
+| 5 | Frische: **signierter** `ts` ± 120 s | verwerfen, Audit `stale` | nein |
+| 6 | Duplikat: **Signatur** bereits gesehen | verwerfen, Audit `duplicate` | nein |
+| 7 | Lockout aktiv | *quarantine* | – |
+| 8 | – | *processed* | – |
 
-**Validierung:**
-```python
-now = datetime.now(timezone.utc)
-msg_time = datetime.fromisoformat(envelope["ts_utc"])
-skew = abs((now - msg_time).total_seconds())
+Jede dekodierbare Nutzlast wird vor Schritt 4 unverändert in `data/raw/` abgelegt (Eingangsspur für die Forensik).
 
-if skew > MAX_SKEW_SECONDS:
-    # Drop: Nachricht zu alt oder zu weit in der Zukunft
-```
+### Warum auf signierten Daten
 
-**Schutz gegen:**
-- Sehr alte Nachrichten (Replay nach Stunden/Tagen)
-- Nachrichten mit Zukunfts-Timestamps (ungültige Uhren)
+Die Felder des Envelopes (`msg_id`, `ts_utc`, `zone_id`) sind nicht signiert. Eine frühere Version prüfte Frische an `ts_utc` und Duplikate an `msg_id`. Ein Angreifer konnte eine mitgeschnittene Nutzlast in einen neuen Envelope mit neuer `msg_id` und neuer Zeit legen; beide Prüfungen hätten nichts bemerkt.
 
-**Limitierungen:**
-- Erfordert synchronisierte Uhren (NTP auf Zonensensor + Leitstand)
-- Skew-Fenster ist Kompromiss: zu klein → false positives, zu groß → Replay-Fenster
+Jetzt werden der Zeitstempel `ts` aus der signierten Nutzlast und die Signatur selbst verwendet. Beides kann ein Angreifer nicht ändern, ohne dass Schritt 4 fehlschlägt.
 
----
+### Warum die Signatur vor Frische und Duplikat
 
-### 2. Deduplication (msg_id Cache)
+- Der Duplikat-Speicher soll nur echte Nachrichten enthalten. Sonst könnte ein Angreifer ihn mit erfundenen Einträgen füllen und echte Einträge verdrängen.
+- Eine gefälschte, zugleich veraltete Nachricht wird als `invalid_signature` gezählt und nicht als harmloses `stale` verworfen.
 
-**Mechanismus:**
-- Jede Nachricht hat eindeutige `msg_id` (UUID v4)
-- Der Leitstand hält LRU-Cache der letzten N msg_id (z.B. N=500)
-- Duplicate msg_id → Drop + Audit-Log
+### Duplikat-Speicher
 
-**Implementierung:**
-```python
-seen_msg_ids = collections.deque(maxlen=500)
+- Schlüssel: Signatur der Nutzlast, normalisiert wie bei der Signaturprüfung (Leerzeichen am Rand entfernt). Eine Schreibvariante, die die Prüfung besteht, gilt damit nicht als neue Nachricht.
+- Ein gemeinsamer Speicher für alle Zonen: `zone_id` ist nicht signiert und darf den Speicher nicht aufteilen.
+- Größe: 500 Einträge (`DEDUP_CACHE_SIZE`), der älteste fällt heraus. Bei einer Nachricht pro Minute reicht das weit über das Frischefenster von 120 Sekunden hinaus.
 
-if envelope["msg_id"] in seen_msg_ids:
-    # Duplicate erkannt
-    log_security_event("duplicate", msg_id=msg_id)
-    return  # Drop
+### Warum `stale` und `duplicate` nicht für den Lockout zählen
 
-seen_msg_ids.append(envelope["msg_id"])
-```
+- Bei QoS 1 darf der Broker eine Nachricht mehrfach zustellen.
+- Nach einer Verbindungsstörung sendet der Zonensensor ältere Messwerte nach.
 
-**Schutz gegen:**
-- Exakte Replays (identische Nachricht mehrfach gesendet)
-- QoS-1-Duplikate (MQTT Broker sendet bei Unsicherheit mehrfach)
+Beides ist kein Angriff. Würden diese Fälle zählen, könnte eine kurze Netzstörung einen Lockout auslösen. Sie werden über `SecurityManager.on_dropped()` im Security- und Audit-Log festgehalten.
 
-**Cache-Größe:**
-- Sliding Window: letzte 500 Nachrichten
-- Bei Telemetrie-Rate von 1 msg/10s → ca. 83 Minuten Abdeckung
-- Trade-off: Speicher vs. Replay-Fenster
+### Beispiel
 
----
-
-### Kombination beider Mechanismen
-
-**Beispiel-Szenario:**
-
-1. Angreifer zeichnet Nachricht `msg_id=ABC` auf (ts_utc=10:00)
-2. Nach 5 Minuten: Replay-Versuch mit gleicher Nachricht
-   - Freshness: OK (innerhalb 120s Skew)
-   - Dedup: **FAIL** (msg_id bereits im Cache) → **DROP**
-
-3. Nach 2 Stunden: Erneuter Replay-Versuch
-   - Freshness: **FAIL** (ts_utc zu alt) → **DROP**
-   - Dedup wird nicht erreicht
-
-**Ergebnis:** Robuster Schutz über kurze (Dedup) und lange (Freshness) Zeiträume.
+1. Angreifer schneidet eine gültige Nachricht mit (signierter `ts` = 10:00:05).
+2. 10:00:40: Er sendet dieselbe Nutzlast in einem neuen Envelope (neue `msg_id`, neue Zeit).
+   - Signatur: gültig
+   - Frische: OK (35 s)
+   - Duplikat: **Signatur bereits gesehen → verworfen**
+3. 10:10:00: Erneuter Versuch.
+   - Frische: **signierter `ts` 10 Minuten alt → verworfen**
 
 ---
 
@@ -397,13 +376,19 @@ Alle sicherheitsrelevanten Ereignisse werden protokolliert:
 ### Replay-Schutz
 
 **Time-Sync-Abhängigkeit:**
-- Freshness Check erfordert NTP
-- Clock-Drift → False Positives/Negatives
+- Freshness Check erfordert synchrone Uhren (NTP auf Zonensensor und Leitstand)
+- Falsche Uhrzeit auf einem Gerät → echte Nachrichten werden als `stale` verworfen
 
-**Cache-Größe:**
-- LRU Cache ist begrenzt (z.B. 500 Einträge)
-- Sehr alte Replays (außerhalb Cache) könnten durchkommen
-- In Praxis: Freshness Check fängt diese ab
+**Neustart des Leitstands:**
+- Der Duplikat-Speicher liegt nur im Arbeitsspeicher
+- Nach einem Neustart wird eine Nachricht, deren signierter `ts` jünger als 120 Sekunden ist, erneut angenommen
+
+**Nachgesendete Messwerte:**
+- Messwerte, die nach einer Verbindungsstörung mehr als 120 Sekunden alt ankommen, werden verworfen
+- Sie bleiben in der CSV-Datei auf dem Zonensensor erhalten und können von dort manuell ausgewertet werden
+
+**Weitere Eingänge:**
+- Der Weg über die Kommandozeile (`receiver.py --file`) prüft nur die Signatur, nicht Frische und Duplikate
 
 ### Adaptive Security
 
