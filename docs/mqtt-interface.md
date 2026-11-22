@@ -91,7 +91,10 @@ Reihenfolge der Verarbeitung im Leitstand (`mqtt_subscriber.process_message`):
    (Pflichtfelder vorhanden, `v == "1"`, `zone_id` = eigene Zone, `msg_type == "telemetry"`)
    → sonst **drop**, `malformed_packet` an den SecurityManager.
 
-2. Paketrate der Zone prüfen (eigener Branch).
+2. Paketrate der Zone prüfen: höchstens `RATE_LIMIT_MAX_MESSAGES` (Standard 10)
+   in `RATE_LIMIT_WINDOW_SECONDS` (Standard 60 s), gleitendes Fenster
+   → sonst **drop** ohne Dekodieren, HMAC und Ablage; gesammelte Meldung
+   `rate_limited` (höchstens eine je Fenster).
 
 3. Signed Payload aus `payload_b64` decodieren (Base64 streng, UTF-8, 6 Felder)
    → sonst `corrupt_payload` bzw. `malformed_packet` (letzteres in *rejected*).
@@ -117,7 +120,8 @@ Reihenfolge der Verarbeitung im Leitstand (`mqtt_subscriber.process_message`):
   (`DEDUP_CACHE_SIZE`, Standard 500) für alle Zonen.
 
 - Fehler aus Schritt 1, 3 und 4 zählen für den Lockout.
-  `stale` und `duplicate` zählen nicht (QoS-1-Wiederholung, Nachsenden nach Störung).
+  `rate_limited`, `stale` und `duplicate` zählen nicht (Flut darf die Zone nicht sperren;
+  QoS-1-Wiederholung, Nachsenden nach Störung).
 
 ---
 
@@ -131,6 +135,10 @@ Reihenfolge der Verarbeitung im Leitstand (`mqtt_subscriber.process_message`):
   - `control_center`: `warehouse/v1/+/telemetry` lesen
   - `zone-01`: `warehouse/v1/ZONE-01/telemetry` schreiben
 - CONNACK 4/5 (Zugangsdaten falsch, nicht berechtigt): Client beendet sich mit Code 2.
+- Wiederverbindung (`shared/comm/mqtt_reconnect.py`): Wartezeit 1 s bis 30 s;
+  auch der erste Verbindungsaufbau wird wiederholt, Clients dürfen vor dem Broker starten.
+  Der Subscriber setzt das Abo nach jeder Verbindung neu, der Publisher puffert
+  QoS-1-Nachrichten ohne Verbindung (`QUEUED (offline)`).
 - HMAC / Signed Payload bleibt immer aktiv, unabhängig von der Anmeldung.
 
 ### Offen
