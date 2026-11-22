@@ -19,6 +19,10 @@ function el(tag, className, text) {
 }
 
 // ── Diagramme ───────────────────────────────────────
+// Mindestspanne der y-Achse je Messgröße: Sensorrauschen (z. B. 0,1 hPa)
+// soll nicht wie ein starker Ausschlag über die ganze Höhe aussehen.
+const MIN_SPAN = { temperature: 2, humidity: 5, pressure: 2 };
+
 const CHART_CONFIG = (label, color) => ({
   type: "line",
   data: {
@@ -30,7 +34,9 @@ const CHART_CONFIG = (label, color) => ({
         borderColor: color,
         borderWidth: 1.5,
         pointRadius: 0,
-        tension: 0.4,
+        // glatt, aber ohne Überschwingen: die Linie bleibt zwischen den
+        // gemessenen Werten und zeigt keine Werte, die es nie gab
+        cubicInterpolationMode: "monotone",
         fill: false,
       },
     ],
@@ -51,18 +57,27 @@ const CHART_CONFIG = (label, color) => ({
   },
 });
 
-const chartTemp = new Chart(
-  document.getElementById("chart-temp"),
-  CHART_CONFIG("Temperatur", "#ff6b35"),
-);
-const chartHum = new Chart(
-  document.getElementById("chart-hum"),
-  CHART_CONFIG("Luftfeuchtigkeit", "#00d4aa"),
-);
-const chartPress = new Chart(
-  document.getElementById("chart-press"),
-  CHART_CONFIG("Luftdruck", "#7b8cff"),
-);
+function makeChart(id, label, color, minSpan) {
+  const chart = new Chart(document.getElementById(id), CHART_CONFIG(label, color));
+  chart.minSpan = minSpan;
+  return chart;
+}
+
+const chartTemp = makeChart("chart-temp", "Temperatur", "#ff6b35", MIN_SPAN.temperature);
+const chartHum = makeChart("chart-hum", "Luftfeuchtigkeit", "#00d4aa", MIN_SPAN.humidity);
+const chartPress = makeChart("chart-press", "Luftdruck", "#7b8cff", MIN_SPAN.pressure);
+
+// Achse mindestens minSpan breit, um den Mittelpunkt der Werte.
+// suggestedMin/Max erweitern nur: Größere Schwankungen skaliert Chart.js
+// wie gewohnt, die Achsenbeschriftung bleibt auf runden Werten.
+function fitAxis(chart) {
+  const values = chart.data.datasets[0].data;
+  if (!values.length) return;
+  const mid = (Math.min(...values) + Math.max(...values)) / 2;
+  const y = chart.options.scales.y;
+  y.suggestedMin = mid - chart.minSpan / 2;
+  y.suggestedMax = mid + chart.minSpan / 2;
+}
 
 // ── Grenzwerte ──────────────────────────────────────
 let thresholds = null;
@@ -172,6 +187,7 @@ function addPoint(chart, label, value) {
     chart.data.labels.shift();
     chart.data.datasets[0].data.shift();
   }
+  fitAxis(chart);
   chart.update();
 }
 
