@@ -9,10 +9,10 @@ Aufruf aus dem Projektroot:  python scripts/ai_smoke_test.py
 import time
 from datetime import datetime, timezone
 
-from dashboard.backend.config import MODEL_PATH
+from dashboard.backend.config import MODEL_PATH, MODEL_SHA256_PATH
 from dashboard.backend.services.ai_analyst import AIAnalyst
 from dashboard.backend.services.csv_reader import read_all
-from dashboard.backend.services.model_loader import load_model
+from dashboard.backend.services.model_loader import prepare_model
 from dashboard.backend.services.prompt_builder import build_prompt
 
 CUTOFF = datetime(2026, 5, 25, 12, 50, tzinfo=timezone.utc)
@@ -22,9 +22,9 @@ packets = [p for p in read_all() if p.ts <= CUTOFF]
 print("=== Prompt ===")
 print(build_prompt(packets))
 
-print("\n=== Modell wird geladen ===")
+print("\n=== Modell wird geprüft (SHA-256) und geladen ===")
 t0 = time.time()
-analyst = AIAnalyst(load_model(str(MODEL_PATH)))
+analyst = AIAnalyst(prepare_model(MODEL_PATH, MODEL_SHA256_PATH))
 print(f"Geladen in {time.time() - t0:.1f} s")
 
 print("\n=== Generierung läuft (auf Intel-CPU evtl. mehrere Minuten) ===")

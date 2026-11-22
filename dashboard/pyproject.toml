@@ -1,9 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+# Versionen wie auf dem Demo-Rechner (MacBook Air M3) getestet.
+# Das Paket installiert nur die Abhängigkeiten; der Code wird aus dem
+# Projektverzeichnis importiert (scripts/dashboard_start.sh startet dort).
+# llama-cpp-python baut auf Apple Silicon automatisch mit Metal.
 [project]
 name = "warehouse-dashboard"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
-    "fastapi",
-    "uvicorn",
-    "sse-starlette"
+    "warehouse-control-center",
+    "fastapi==0.162.0",
+    "starlette==1.10.0",
+    "uvicorn==0.54.0",
+    "sse-starlette==3.6.0",
+    "pydantic==2.14.2",
+    "llama-cpp-python==0.3.36"
 ]
+
+[tool.setuptools]
+packages = []

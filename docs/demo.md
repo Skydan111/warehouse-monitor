@@ -46,12 +46,14 @@ pip install -r requirements-dev.txt
 pip install -e shared
 pip install -e control_center
 pip install -e zone_sensor
+pip install -e dashboard   # nur auf dem Leitstand
 ```
 
 **Was passiert:**
 - `shared` wird installiert (keine externen Dependencies)
 - `control_center` wird installiert inkl. `pandas`, `matplotlib`, `paho-mqtt`, `pyyaml`
 - `zone_sensor` wird installiert inkl. `paho-mqtt`, `adafruit-circuitpython-bme280`
+- `dashboard` installiert nur Abhängigkeiten mit festen Versionen: `fastapi`, `uvicorn`, `sse-starlette`, `pydantic`, `llama-cpp-python` (auf Apple Silicon automatisch mit Metal)
 
 ### 5. Installation verifizieren
 
@@ -212,6 +214,34 @@ tail -f logs/security_audit.jsonl | jq
 ```bash
 ./scripts/control_center_stop.sh
 ```
+
+---
+
+## Dashboard starten
+
+Läuft auf dem Leitstand, nach `control_center_start.sh`:
+
+```bash
+./scripts/dashboard_start.sh
+```
+
+**Erwartete Ausgabe:**
+```
+[dashboard_start] Starte Dashboard auf http://127.0.0.1:8000 ...
+[dashboard_start] Bereit: http://127.0.0.1:8000 (pid=…, log=logs/dashboard.log)
+```
+
+Dann im Browser <http://127.0.0.1:8000> öffnen. Das Dashboard ist nur auf diesem Rechner erreichbar.
+
+Erscheint zusätzlich `WARNUNG: KI-Analyse deaktiviert: …`, läuft das Monitoring, aber „Analysieren“ meldet den Grund (Modell fehlt, Prüfsumme falsch). Siehe [security.md](security.md#dashboard-und-ki-analyse).
+
+### Stoppen
+
+```bash
+./scripts/dashboard_stop.sh
+```
+
+**Reihenfolge beim Herunterfahren:** Zonensensor → Dashboard → Leitstand.
 
 ---
 

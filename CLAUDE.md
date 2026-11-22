@@ -30,6 +30,10 @@ Control center (Leitstand):
 - Status: `./scripts/control_center_status.sh`
 - Stop: `./scripts/control_center_stop.sh`
 
+Dashboard (Leitstand, only 127.0.0.1):
+- Start: `./scripts/dashboard_start.sh`
+- Stop: `./scripts/dashboard_stop.sh`
+
 ---
 
 ## 2. Branch Policy (Learning Mode)
