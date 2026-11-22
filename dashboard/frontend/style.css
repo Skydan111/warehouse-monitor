@@ -239,8 +239,11 @@ header {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
-  /* 240 px auf kleinen, bis 300 px auf hohen Bildschirmen */
-  height: clamp(240px, 30vh, 300px);
+  /* Diagramme füllen den freien Platz des Fensters, mindestens 240 px.
+     Reicht der Platz nicht (kleines Fenster, langer KI-Bericht), wird
+     die Seite gescrollt. */
+  flex: 1 1 240px;
+  min-height: 240px;
 }
 
 .chart-card {
