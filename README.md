@@ -230,6 +230,7 @@ pip install -r requirements-dev.txt
 pip install -e shared
 pip install -e control_center
 pip install -e zone_sensor
+pip install -e dashboard   # nur auf dem Leitstand: FastAPI, llama-cpp-python
 
 # Installation verifizieren
 pytest
@@ -268,6 +269,14 @@ Vorlage mit allen Variablen: `.env.example`.
 
 Das Skript lädt `.env`, startet den MQTT-Broker (Docker, Port 1883, nur mit Anmeldung) und den Subscriber. Ohne Schlüssel, Zugangsdaten oder Passwortdatei bricht es ab.
 
+### Dashboard starten (Leitstand)
+
+```bash
+./scripts/dashboard_start.sh
+```
+
+Das Dashboard ist danach unter <http://127.0.0.1:8000> erreichbar, nur auf diesem Rechner. Beim Start wird die Prüfsumme des KI-Modells `models/warehouse_model.gguf` geprüft; fehlt das Modell oder stimmt die Prüfsumme nicht, läuft das Monitoring weiter und nur die KI-Analyse ist gesperrt (Meldung im Skript und in `logs/dashboard.log`). Details: [docs/security.md](docs/security.md#dashboard-und-ki-analyse).
+
 ### Zonensensor starten (danach)
 
 ```bash
@@ -282,6 +291,7 @@ Der Zonensensor lädt `.env`, liest BME280 (oder Simulation), signiert Telemetri
 tail -f logs/logger.log
 tail -f logs/control_center_subscriber.log
 tail -f logs/security_audit.jsonl
+tail -f logs/dashboard.log
 ```
 
 ### Datenfluss verifizieren
@@ -295,8 +305,8 @@ tail data/processed/*.csv
 
 ```bash
 ./scripts/zone_sensor_stop.sh
+./scripts/dashboard_stop.sh
 ./scripts/control_center_stop.sh
-docker compose -f docker-compose.mqtt.yml down
 ```
 
 **Weitere Details:** Siehe [docs/demo.md](docs/demo.md)

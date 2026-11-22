@@ -328,6 +328,41 @@ if ratio >= lockout_threshold:
 
 ---
 
+## Dashboard und KI-Analyse
+
+Das Dashboard (`dashboard/`) liest nur verifizierte Daten aus `data/processed/`. Es ist kein Teil der Prüfkette, aber eine eigene Angriffsfläche.
+
+| Maßnahme | Umsetzung | Schützt gegen |
+|---|---|---|
+| Nur lokal erreichbar | `scripts/dashboard_start.sh` startet uvicorn fest auf `127.0.0.1` | Zugriff aus dem Netz auf Messwerte und `/analyse` |
+| Keine Geheimnisse im Dashboard | das Startskript lädt die `.env` nicht | Abfluss von Geräteschlüssel oder Broker-Passwort über das Dashboard |
+| Eine Analyse gleichzeitig | zweite Anfrage an `/analyse` erhält sofort `429` mit `Retry-After: 30`, statt zu warten | Blockieren des Rechners durch viele Analyse-Anfragen |
+| Prüfsumme des Modells | SHA-256 der Datei `models/warehouse_model.gguf` wird beim Start mit `models/warehouse_model.gguf.sha256` verglichen (Vorrang: Umgebungsvariable `MODEL_SHA256`); erst danach wird geladen | beschädigte, unvollständig kopierte oder vertauschte Modelldatei |
+| Fail-secure beim Modell | fehlt das Modell, stimmt die Prüfsumme nicht oder scheitert das Laden, antwortet `/analyse` mit `503` und dem Grund; das Monitoring läuft weiter | stilles Weiterarbeiten mit falschem Modell |
+| Analyse nur mit aktuellen Daten | `409`, wenn die letzte Messung älter als 5 Minuten ist oder weniger als 10 Messpunkte vorliegen | Bericht auf veralteter Grundlage |
+| Kennzeichnung | jeder Bericht trägt „KI-generiert“ und den Hinweis, dass die Messwerte maßgeblich sind | Verwechslung von Modelltext mit Messwerten |
+| Kein HTML aus Daten | Messwerte und Modelltext gelangen nur als Text ins DOM, nie als HTML | Einschleusen von HTML/JavaScript über den Modelltext |
+| Keine externen Ressourcen | Chart.js und Schriften liegen in `dashboard/frontend/vendor/` | Weitergabe der IP-Adresse an CDN/Google Fonts (DSGVO), Ausfall ohne Internet, ausgetauschte Bibliothek auf dem CDN |
+
+### Antwortcodes von `/analyse`
+
+| Code | Bedeutung |
+|---|---|
+| `200` | Bericht erzeugt |
+| `409` | Analyse bewusst verweigert: keine, zu wenige oder veraltete Daten |
+| `429` | es läuft bereits eine Analyse |
+| `503` | KI-Modell nicht verfügbar: Datei fehlt, Prüfsumme falsch oder Laden gescheitert |
+
+### Prüfsumme nach neuem Modell-Export
+
+Wird das Modell neu exportiert, muss die Prüfsummendatei angepasst und committet werden, sonst bleibt die Analyse mit `503` gesperrt:
+
+```bash
+cd models && shasum -a 256 warehouse_model.gguf > warehouse_model.gguf.sha256
+```
+
+---
+
 ## Konfiguration
 
 Sicherheitsparameter sind in `configs/security_policy.yaml` definiert:
@@ -418,6 +453,17 @@ Alle sicherheitsrelevanten Ereignisse werden protokolliert:
 
 **Weitere Eingänge:**
 - Der Weg über die Kommandozeile (`receiver.py --file`) prüft nur die Signatur, nicht Frische und Duplikate
+
+### Dashboard
+
+**Prüfsumme statt Signatur:**
+- Die Prüfsumme erkennt beschädigte oder vertauschte Modelldateien
+- Gegen einen Angreifer mit Schreibzugriff auf den Rechner schützt sie nicht: Er kann Modell und Prüfsummendatei gemeinsam ersetzen
+- Schutz dagegen wäre eine digitale Signatur des Modells (nicht umgesetzt)
+
+**Keine Anmeldung:**
+- Das Dashboard hat keine Benutzeranmeldung; der Schutz beruht allein darauf, dass es nur auf `127.0.0.1` lauscht
+- Jeder Benutzer und jedes Programm auf dem Leitstand-Rechner kann es aufrufen
 
 ### Adaptive Security
 
