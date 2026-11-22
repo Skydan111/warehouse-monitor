@@ -239,11 +239,12 @@ header {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
-  /* Diagramme füllen den freien Platz des Fensters, mindestens 240 px.
-     Reicht der Platz nicht (kleines Fenster, langer KI-Bericht), wird
-     die Seite gescrollt. */
-  flex: 1 1 240px;
+  /* Freier Platz wird 3 : 2 zwischen Diagrammen und KI-Analyse geteilt.
+     Diagramme: 240–480 px; was darüber hinaus frei ist, bekommt die
+     KI-Analyse. Reicht der Platz nicht, wird die Seite gescrollt. */
+  flex: 3 1 240px;
   min-height: 240px;
+  max-height: 480px;
 }
 
 .chart-card {
@@ -327,6 +328,8 @@ header {
   display: flex;
   align-items: flex-start; /* Beschriftung und Knopf oben links */
   gap: 16px;
+  flex: 2 1 auto;
+  min-height: 160px;
 }
 
 .ai-left {
