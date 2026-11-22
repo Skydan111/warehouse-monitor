@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from dashboard.backend.config import MODEL_PATH, MODEL_SHA256_PATH
+from dashboard.backend.config import FRONTEND_DIR, MODEL_PATH, MODEL_SHA256_PATH
 from dashboard.backend.routers.analysis import router as analysis_router
 from dashboard.backend.routers.stream import router as stream_router
 from dashboard.backend.routers.telemetry import router as telemetry_router
@@ -36,5 +36,6 @@ app.include_router(telemetry_router)
 app.include_router(stream_router)
 app.include_router(analysis_router)
 
-# Muss nach den Routern stehen, sonst fängt "/" alle Pfade ab
-app.mount("/", StaticFiles(directory="dashboard/frontend", html=True), name="frontend")
+# Muss nach den Routern stehen, sonst fängt "/" alle Pfade ab.
+# Absoluter Pfad: funktioniert unabhängig vom Arbeitsverzeichnis.
+app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
