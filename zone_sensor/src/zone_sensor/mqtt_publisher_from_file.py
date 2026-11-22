@@ -11,6 +11,7 @@ import paho.mqtt.client as mqtt
 from shared.comm.envelope import EnvelopeV1, b64_from_bytes
 from shared.comm.topics import telemetry_topic
 from shared.comm.mqtt_auth import FATAL_CONNECT_RC, connect_rc_text, load_mqtt_credentials
+from shared.comm.mqtt_reconnect import configure_reconnect
 
 
 def _env(name: str, default: str) -> str:
@@ -72,7 +73,11 @@ def main() -> int:
     client = mqtt.Client(client_id=f"zone-sensor-{zone_id}-file", userdata=state)
     client.username_pw_set(creds.username, creds.password)
     client.on_connect = on_connect
-    client.connect(broker_host, broker_port, keepalive=30)
+    configure_reconnect(client, "[zone_sensor]")
+    # connect_async + loop_start: Der Netzwerk-Thread verbindet sich (auch beim
+    # ersten Mal) mit Wiederholung. Ist der Broker nicht erreichbar, puffert paho
+    # QoS-1-Nachrichten und sendet sie nach der Wiederverbindung.
+    client.connect_async(broker_host, broker_port, keepalive=30)
     client.loop_start()
 
     print(
@@ -127,8 +132,12 @@ def main() -> int:
                     payload_b64=b64_from_bytes(signed_line.encode("utf-8")),
                 )
 
-                client.publish(topic, payload=env.to_json(), qos=1, retain=False)
-                print(f"[zone_sensor] TX msg_id={env.msg_id} ts={signed_line.split(',', 1)[0]}")
+                info = client.publish(topic, payload=env.to_json(), qos=1, retain=False)
+                ts = signed_line.split(",", 1)[0]
+                if info.rc == mqtt.MQTT_ERR_NO_CONN:
+                    print(f"[zone_sensor] QUEUED (offline) msg_id={env.msg_id} ts={ts}")
+                else:
+                    print(f"[zone_sensor] TX msg_id={env.msg_id} ts={ts}")
 
     finally:
         client.loop_stop()

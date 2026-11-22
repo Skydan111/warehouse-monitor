@@ -142,7 +142,7 @@ Implementiert in `control_center/mqtt_subscriber.py` (`process_message`):
 | Schritt | Prüfung | Bei Fehler | Zählt für Lockout |
 |---------|---------|------------|-------------------|
 | 1 | Envelope: JSON, `v == "1"`, Pflichtfelder, `zone_id` = eigene Zone, `msg_type == "telemetry"` | verwerfen, `malformed_packet` | ja (0,8) |
-| 2 | Paketrate der Zone | *(eigener Branch)* | – |
+| 2 | Paketrate der Zone: höchstens 10 Nachrichten in 60 s (gleitendes Fenster) | verwerfen, Audit `rate_limited` (gesammelt) | nein |
 | 3 | Nutzlast: Base64 (streng), UTF-8 | verwerfen, `corrupt_payload` | ja (0,6) |
 | 3 | Nutzlast: 6 Felder, Zahlen lesbar | *rejected*, `malformed_packet` | ja (0,8) |
 | 4 | HMAC-Signatur | *rejected*, `invalid_signature` | ja (1,0) |
@@ -151,7 +151,7 @@ Implementiert in `control_center/mqtt_subscriber.py` (`process_message`):
 | 7 | Lockout aktiv | *quarantine* | – |
 | 8 | – | *processed* | – |
 
-Jede dekodierbare Nutzlast wird vor Schritt 4 unverändert in `data/raw/` abgelegt (Eingangsspur für die Forensik).
+Jede dekodierbare Nutzlast wird vor Schritt 4 unverändert in `data/raw/` abgelegt (Eingangsspur für die Forensik). Nachrichten, die Schritt 2 verwirft, erreichen diese Stelle nicht.
 
 ### Warum auf signierten Daten
 
@@ -176,6 +176,34 @@ Jetzt werden der Zeitstempel `ts` aus der signierten Nutzlast und die Signatur s
 - Nach einer Verbindungsstörung sendet der Zonensensor ältere Messwerte nach.
 
 Beides ist kein Angriff. Würden diese Fälle zählen, könnte eine kurze Netzstörung einen Lockout auslösen. Sie werden über `SecurityManager.on_dropped()` im Security- und Audit-Log festgehalten.
+
+### Paketrate je Zone (Schritt 2)
+
+Implementiert in `control_center/mqtt_guard.py` (`RateLimiter`).
+
+- **Grenze:** höchstens 10 Nachrichten je Zone in 60 Sekunden, gleitendes Fenster. Der Zonensensor sendet eine Nachricht pro Minute; die Grenze lässt das Zehnfache zu. Einstellbar über `RATE_LIMIT_MAX_MESSAGES` und `RATE_LIMIT_WINDOW_SECONDS` (`scripts/control_center_start.sh`).
+- **Vor der Signaturprüfung:** Bei einer Flut soll der Leitstand weder HMAC rechnen noch nach `data/` schreiben. Verworfene Nachrichten werden nicht dekodiert, nicht geprüft und nicht abgelegt.
+- **Gezählt werden nur durchgelassene Nachrichten.** Eine anhaltende Flut verlängert das Fenster nicht: Spätestens 60 Sekunden nach der letzten durchgelassenen Nachricht kommt ein echter Messwert wieder durch.
+- **Zählt nicht für den Lockout.** Sonst könnte jeder, der auf das Topic der Zone schreiben darf, mit einer Flut die Zone sperren. Gefälschte Nachrichten, die durch die Grenze kommen, werden in Schritt 4 wie bisher als `invalid_signature` gezählt.
+- **Gesammelte Meldung:** höchstens ein Eintrag `rate_limited` je Fenster im Security- und Audit-Log (`SecurityManager.on_dropped()`), mit Anzahl (`count`) und Grenze (`limit`). Die erste Verwerfung wird sofort gemeldet, die weiteren frühestens ein Fenster später. Das Log wächst bei einer Flut nicht mit.
+- **Begrenzter Speicher:** je Zone höchstens 10 Zeitstempel, höchstens 64 Zonen.
+
+Die Zone wird hier aus dem (unsignierten) Envelope gelesen. Das ist vertretbar, weil Schritt 1 nur die eigene Zone durchlässt und die Broker-ACL das Topic an den Benutzer `zone-01` bindet.
+
+**Grenzen:**
+- Wer die Zugangsdaten von `zone-01` hat, kann mit einer Flut echte Messwerte innerhalb eines Fensters verdrängen (Verfügbarkeit). Die Grenze schützt den Leitstand, nicht die Zone.
+- Nach einer längeren Verbindungsstörung sendet der Zonensensor gepufferte Nachrichten auf einmal. Ab der elften innerhalb von 60 Sekunden werden sie verworfen, noch bevor ihre Frische geprüft wird. Die Werte bleiben in der CSV-Datei auf dem Zonensensor erhalten (siehe *Grenzen & Annahmen*).
+
+## Verbindungsaufbau und Wiederverbindung
+
+Implementiert in `shared/comm/mqtt_reconnect.py`, genutzt von Leitstand-Subscriber und Zonensensor-Publisher.
+
+- **Wartezeit zwischen Versuchen:** 1 Sekunde, verdoppelt bis höchstens 30 Sekunden (`reconnect_delay_set(1, 30)`; paho-Standard wären 120 Sekunden).
+- **Erster Verbindungsaufbau wird wiederholt** (`connect_async`): Startet ein Client vor dem Broker, etwa direkt nach `docker compose up -d`, wartet er, statt sich mit `ConnectionRefusedError` zu beenden.
+- **Abo nach Wiederverbindung:** Der Subscriber setzt das Abo in `on_connect` bei jeder Verbindung neu.
+- **Puffer im Zonensensor:** Ohne Verbindung hält paho QoS-1-Nachrichten im Arbeitsspeicher und sendet sie nach der Wiederverbindung. Die Ausgabe lautet dann `QUEUED (offline)` statt `TX`.
+- **Abgelehnte Anmeldung** (CONNACK 4/5) wird nicht wiederholt: Beide Clients beenden sich mit Code 2.
+- Verbindungsverlust und nicht erreichbarer Broker erscheinen im Log des jeweiligen Clients, ohne Zugangsdaten.
 
 ### Beispiel
 
@@ -385,7 +413,8 @@ Alle sicherheitsrelevanten Ereignisse werden protokolliert:
 
 **Nachgesendete Messwerte:**
 - Messwerte, die nach einer Verbindungsstörung mehr als 120 Sekunden alt ankommen, werden verworfen
-- Sie bleiben in der CSV-Datei auf dem Zonensensor erhalten und können von dort manuell ausgewertet werden
+- Kommen nach einer Störung mehr als 10 gepufferte Nachrichten innerhalb von 60 Sekunden an, verwirft die Paketrate den Rest, noch vor der Frischeprüfung
+- In beiden Fällen bleiben die Werte in der CSV-Datei auf dem Zonensensor erhalten und können von dort manuell ausgewertet werden
 
 **Weitere Eingänge:**
 - Der Weg über die Kommandozeile (`receiver.py --file`) prüft nur die Signatur, nicht Frische und Duplikate
@@ -443,8 +472,8 @@ Sicherheitseigenschaften werden in `tests/integration/security/` geprüft:
    - Broker prüft Client-Identität
 
 5. **Rate Limiting**
-   - Broker-seitige Limits pro zone_id
-   - Schutz vor Flooding
+   - Umgesetzt: Leitstand begrenzt je Zone auf 10 Nachrichten in 60 s, vor der Signaturprüfung
+   - Offen: Begrenzung schon am Broker oder im Netz, damit eine Flut den Leitstand gar nicht erst erreicht
 
 6. **Key Rotation**
    - Regelmäßiger HMAC-Schlüsselwechsel

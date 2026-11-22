@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
 import paho.mqtt.client as mqtt
@@ -10,9 +10,10 @@ import paho.mqtt.client as mqtt
 from shared.comm.envelope import EnvelopeV1, bytes_from_b64
 from shared.comm.topics import telemetry_topic
 from shared.comm.mqtt_auth import FATAL_CONNECT_RC, connect_rc_text, load_mqtt_credentials
+from shared.comm.mqtt_reconnect import configure_reconnect
 from shared.protocol.signed_csv import parse_signed_line, verify_signed_line
 from shared.crypto.secret_env import load_sensor_secret_hex
-from control_center.mqtt_guard import GuardConfig, MqttMessageGuard
+from control_center.mqtt_guard import GuardConfig, MqttMessageGuard, RateLimitConfig, RateLimiter
 from control_center import packet_pipeline
 from control_center.input_modes import ingest_raw_line
 from control_center.io_utils import append_line
@@ -39,6 +40,8 @@ def on_connect(client: mqtt.Client, userdata: object, flags: dict, rc: int) -> N
             client.disconnect()
         return
 
+    # Wird nach JEDER (Wieder-)Verbindung aufgerufen: Abo neu setzen,
+    # denn mit clean_session=True vergisst der Broker es beim Abbruch.
     print(f"[control_center] Connected. Subscribing to {topic}")
     client.subscribe(topic, qos=1)
 
@@ -47,7 +50,7 @@ def on_connect(client: mqtt.Client, userdata: object, flags: dict, rc: int) -> N
 # Prüfkette für eine MQTT-Nachricht (Reihenfolge wie in der Dokumentation 3.6.3)
 #
 #   1. Envelope lesbar, Version, Pflichtfelder, passende Zone   -> sonst malformed_packet
-#   2. Paketrate der Zone                                        -> (folgt in eigenem Branch)
+#   2. Paketrate der Zone (vor HMAC, ohne Plattenzugriff)        -> rate_limited (verwerfen)
 #   3. Nutzlast dekodierbar, 6 Felder                            -> corrupt_payload / malformed_packet
 #   4. Signatur gültig                                           -> invalid_signature
 #   5. Frische: signierter Zeitstempel                           -> stale (verwerfen)
@@ -56,7 +59,8 @@ def on_connect(client: mqtt.Client, userdata: object, flags: dict, rc: int) -> N
 #   8. Ablage in processed
 #
 # Fehler aus 1, 3 und 4 werden an den SecurityManager gemeldet und zählen
-# für den Lockout. 5 und 6 werden nur protokolliert (siehe on_dropped).
+# für den Lockout. 2, 5 und 6 werden nur protokolliert (siehe on_dropped);
+# bei 2 gesammelt, höchstens eine Meldung je Fenster.
 # ------------------------------------------------------------------
 
 OUTCOME_ACCEPTED = "accepted"
@@ -66,6 +70,7 @@ OUTCOME_DUPLICATE = "duplicate"
 OUTCOME_INVALID_SIGNATURE = "invalid_signature"
 OUTCOME_MALFORMED = "malformed_packet"
 OUTCOME_CORRUPT = "corrupt_payload"
+OUTCOME_RATE_LIMITED = "rate_limited"
 
 
 @dataclass
@@ -77,6 +82,8 @@ class MessageContext:
     guard: MqttMessageGuard
     secman: Optional[object]
     quarantine_path: Path
+    # Standardwerte 10/60 s; main() übernimmt RATE_LIMIT_* aus der Umgebung.
+    rate_limiter: RateLimiter = field(default_factory=lambda: RateLimiter(RateLimitConfig()))
 
 
 def _report_failure(ctx: MessageContext, reason: str, meta: Dict[str, Any]) -> None:
@@ -122,7 +129,23 @@ def process_message(payload: bytes, ctx: MessageContext) -> str:
         _report_failure(ctx, OUTCOME_MALFORMED, meta)
         return OUTCOME_MALFORMED
 
-    # 2) Paketrate je Zone: folgt in einem eigenen Branch (Abgleichliste 7).
+    # 2) Paketrate je Zone – vor Base64, HMAC und jedem Schreibzugriff.
+    #    zone_id ist hier bereits gleich der eigenen Zone (Schritt 1).
+    decision = ctx.rate_limiter.check(env.zone_id)
+    if decision.report_dropped:
+        cfg = ctx.rate_limiter.config
+        print(
+            f"[control_center] DROP_RATE_LIMITED zone_id={env.zone_id} count={decision.report_dropped} "
+            f"limit={cfg.max_messages}/{cfg.window_seconds:g}s",
+            file=sys.stderr,
+        )
+        _report_dropped(ctx, OUTCOME_RATE_LIMITED, {
+            "source": "mqtt", "transport": "mqtt", "zone_id": env.zone_id,
+            "count": decision.report_dropped,
+            "limit": f"{cfg.max_messages}/{cfg.window_seconds:g}s",
+        })
+    if not decision.allowed:
+        return OUTCOME_RATE_LIMITED
 
     # 3) Nutzlast dekodieren
     try:
@@ -192,6 +215,10 @@ def main() -> int:
     dedup_size = int(_env("DEDUP_CACHE_SIZE", "500"))
     max_skew = int(_env("MAX_SKEW_SECONDS", "120"))
     guard = MqttMessageGuard(GuardConfig(dedup_size=dedup_size, max_skew_seconds=max_skew))
+    rate_limiter = RateLimiter(RateLimitConfig(
+        max_messages=int(_env("RATE_LIMIT_MAX_MESSAGES", "10")),
+        window_seconds=float(_env("RATE_LIMIT_WINDOW_SECONDS", "60")),
+    ))
 
     ctx = MessageContext(
         zone_id=zone_id,
@@ -199,19 +226,24 @@ def main() -> int:
         guard=guard,
         secman=secman,
         quarantine_path=quarantine_path,
+        rate_limiter=rate_limiter,
     )
     userdata = {"zone_id": zone_id, "ctx": ctx, "fatal_rc": None}
     client = mqtt.Client(client_id=f"control-center-{zone_id}", userdata=userdata)
     client.username_pw_set(creds.username, creds.password)
     client.on_connect = on_connect
     client.on_message = on_message
+    configure_reconnect(client, "[control_center]")
 
     print(
         f"[control_center] Connecting to mqtt://{broker_host}:{broker_port} "
         f"(zone_id={zone_id}, user={creds.username})"
     )
-    client.connect(broker_host, broker_port, keepalive=30)
-    client.loop_forever()
+    # connect_async + retry_first_connection: Ist der Broker beim Start noch
+    # nicht bereit (z. B. direkt nach docker compose up -d), wird gewartet
+    # statt mit ConnectionRefusedError abzubrechen.
+    client.connect_async(broker_host, broker_port, keepalive=30)
+    client.loop_forever(retry_first_connection=True)
 
     if userdata["fatal_rc"] is not None:
         print("[control_center] Abbruch: Anmeldung am Broker fehlgeschlagen.", file=sys.stderr)

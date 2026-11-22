@@ -118,7 +118,7 @@ Envelope → Verify → Freshness → Dedup → Decision → Routing
 
 ### Anti-Replay Mechanismen
 
-Beide Prüfungen arbeiten auf **signierten** Daten und laufen erst **nach** der Signaturprüfung. Die Felder des Envelopes (`msg_id`, `ts_utc`) sind nicht signiert: Ein Angreifer könnte eine mitgeschnittene Nutzlast in einen neuen Envelope legen.
+Freshness und Deduplication arbeiten auf **signierten** Daten und laufen erst **nach** der Signaturprüfung. Die Paketrate (3) läuft bewusst **davor**. Die Felder des Envelopes (`msg_id`, `ts_utc`) sind nicht signiert: Ein Angreifer könnte eine mitgeschnittene Nutzlast in einen neuen Envelope legen.
 
 **1. Freshness Check**
 - Zeitstempel `ts` aus der signierten Nutzlast wird gegen die Systemzeit geprüft
@@ -130,7 +130,14 @@ Beide Prüfungen arbeiten auf **signierten** Daten und laufen erst **nach** der 
 - Der Leitstand hält einen LRU-Cache der letzten 500 Signaturen
 - Duplicate → Drop + Audit-Log (zählt nicht für den Lockout, weil QoS 1 legitim doppelt zustellt)
 
-**Grenze:** Messwerte, die nach einer Verbindungsstörung mehr als 120 Sekunden alt beim Leitstand ankommen, werden verworfen. Sie bleiben in der CSV-Datei auf dem Zonensensor erhalten.
+**3. Paketrate je Zone**
+- Höchstens 10 Nachrichten in 60 Sekunden (gleitendes Fenster, einstellbar über `RATE_LIMIT_MAX_MESSAGES`/`RATE_LIMIT_WINDOW_SECONDS`)
+- Geprüft direkt nach dem Envelope, **vor** der Signaturprüfung: Bei einer Flut rechnet der Leitstand kein HMAC und schreibt nichts auf die Platte
+- Verworfene zählen nicht für den Lockout; höchstens eine gesammelte Meldung `rate_limited` je Fenster im Audit-Log
+
+**Wiederverbindung:** Subscriber und Publisher warten zwischen Verbindungsversuchen 1 bis 30 Sekunden und dürfen vor dem Broker starten. Nur abgelehnte Zugangsdaten (CONNACK 4/5) beenden sie.
+
+**Grenze:** Messwerte, die nach einer Verbindungsstörung mehr als 120 Sekunden alt beim Leitstand ankommen, werden verworfen. Sendet der Zonensensor nach der Störung mehr als 10 gepufferte Nachrichten auf einmal, verwirft die Paketrate den Rest schon vorher. In beiden Fällen bleiben die Werte in der CSV-Datei auf dem Zonensensor erhalten.
 
 ### Adaptive Security
 
@@ -472,7 +479,7 @@ Siehe [docs/security.md](docs/security.md) für detaillierte Empfehlungen:
 - Secret Management (KMS, Vault)
 - PKI-basierte Authentifizierung
 - Payload-Verschlüsselung (Encrypt-then-MAC)
-- Rate Limiting & DoS-Schutz
+- Rate Limiting schon am Broker bzw. im Netz (DoS-Schutz)
 - Time-Series Database (InfluxDB)
 - Monitoring & Alerting (Grafana, Prometheus)
 
